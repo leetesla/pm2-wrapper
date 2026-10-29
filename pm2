@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH= cd "$(dirname "$0")" && pwd -P)
+NODE='/__GENERATED_AT_INSTALL_TIME__'
+PM2_CLI="$ROOT/node_modules/pm2/bin/pm2"
+
+if [ ! -x "$NODE" ]; then
+  printf 'pm2-wrapper: configured Node executable is missing: %s\n' "$NODE" >&2
+  printf 'Re-run install.sh after installing the desired Node version.\n' >&2
+  exit 1
+fi
+
+if [ ! -f "$PM2_CLI" ]; then
+  printf 'pm2-wrapper: PM2 CLI not found: %s\n' "$PM2_CLI" >&2
+  printf 'Re-run install.sh to repair the installation.\n' >&2
+  exit 1
+fi
+
+exec "$NODE" "$PM2_CLI" "$@"

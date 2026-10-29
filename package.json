@@ -1,11 +1,11 @@
 {
   "name": "pm2-wrapper",
   "version": "0.1.0",
-  "description": "A lightweight wrapper for PM2 with a dedicated Node.js runtime and per-project Node.js selection.",
+  "description": "Generate a PM2 command pinned to a resolved Node.js executable.",
   "license": "MIT",
   "private": true,
   "scripts": {
-    "test": "node --test"
+    "test": "sh -n install.sh && ./install.sh --help"
   },
   "engines": {
     "node": ">=18"

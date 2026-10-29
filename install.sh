@@ -7,13 +7,14 @@ Usage:
   ./install.sh --dir DIR [--node-version VERSION] [--pm2-version VERSION] [--nvm-dir DIR]
 
 Options:
-  --dir DIR             Dedicated installation directory (required)
-  --node-version VER    Set the PM2 runtime version in DIR/.nvmrc
+  --dir DIR             Installation directory (required)
+  --node-version VER    Set the Node version used by PM2
   --pm2-version VER     Install an exact PM2 version or npm dist-tag
   --nvm-dir DIR         nvm directory (default: $NVM_DIR or $HOME/.nvm)
   -h, --help            Show this help
 
-The selected Node.js version must already be installed with nvm.
+The selected Node version must already be installed. nvm is used only during
+installation to resolve the absolute Node executable path.
 USAGE
 }
 
@@ -83,30 +84,31 @@ fi
 export NVM_DIR
 
 [ -s "$NVM_DIR/nvm.sh" ] || fail "nvm.sh not found at $NVM_DIR/nvm.sh (use --nvm-dir to set the nvm directory)"
-
 if [ -z "$NODE_VERSION" ] && [ ! -s "$PREFIX/.nvmrc" ]; then
   fail "no $PREFIX/.nvmrc found; provide --node-version VERSION"
 fi
 
-# Resolve the target runtime without changing files in the target directory yet.
+# nvm is used here only to resolve the Node binary. The generated command
+# contains the absolute path and does not source nvm at runtime.
 # shellcheck disable=SC1090
 . "$NVM_DIR/nvm.sh"
 cd "$PREFIX"
+
 if [ -n "$NODE_VERSION" ]; then
   if ! nvm use "$NODE_VERSION" --silent >/dev/null; then
     fail "Node version $NODE_VERSION is not available; install it first with: nvm install $NODE_VERSION"
   fi
-else
-  if ! nvm use --silent >/dev/null; then
-    fail "Node version in $PREFIX/.nvmrc is not available; install it first with: nvm install"
-  fi
+elif ! nvm use --silent >/dev/null; then
+  fail "Node version in $PREFIX/.nvmrc is not available; install it first with: nvm install"
 fi
+
 NODE=$(nvm which)
 [ -x "$NODE" ] || fail "nvm returned a non-executable Node path: $NODE"
+RESOLVED_VERSION=$("$NODE" --version)
 
 if [ -f "$PREFIX/package.json" ]; then
   PACKAGE_NAME=$("$NODE" -e 'console.log(require(process.argv[1]).name || "")' "$PREFIX/package.json")
-  [ "$PACKAGE_NAME" = "pm2-wrapper-runtime" ] || fail "$PREFIX/package.json belongs to '$PACKAGE_NAME', not pm2-wrapper; use a dedicated installation directory"
+  [ "$PACKAGE_NAME" = "pm2-wrapper-runtime" ] || fail "$PREFIX/package.json belongs to '$PACKAGE_NAME'; use a dedicated installation directory"
 else
   cat > "$PREFIX/package.json" <<'PACKAGE'
 {
@@ -118,31 +120,58 @@ else
 PACKAGE
 fi
 
-# Pin the resolved version, even when the input .nvmrc used an alias such as "22".
-RESOLVED_VERSION=$("$NODE" --version)
+# Store an exact version, even if the input was an alias such as "22".
 printf '%s\n' "${RESOLVED_VERSION#v}" > "$PREFIX/.nvmrc"
 
 if [ -z "$PM2_VERSION" ] && [ -f "$PREFIX/node_modules/pm2/package.json" ]; then
   PM2_VERSION=$("$NODE" -e 'console.log(require(process.argv[1]).version)' "$PREFIX/node_modules/pm2/package.json")
 fi
-if [ -z "$PM2_VERSION" ]; then
-  PM2_VERSION=latest
-fi
+PM2_VERSION=${PM2_VERSION:-latest}
 
-mkdir -p "$PREFIX/bin" "$PREFIX/lib"
-SOURCE_ROOT=$(CDPATH= cd "$(dirname "$0")" && pwd -P)
-
+# nvm use prepends this Node installation to PATH, so npm runs under this Node.
 npm install --prefix "$PREFIX" --save-exact "pm2@$PM2_VERSION"
 
-cp "$SOURCE_ROOT/bin/pm2" "$PREFIX/bin/pm2"
-chmod 755 "$PREFIX/bin/pm2"
-ln -sf pm2 "$PREFIX/bin/pm2-wrapper"
-cp "$SOURCE_ROOT/lib/ecosystem.cjs" "$PREFIX/lib/ecosystem.cjs"
-chmod 644 "$PREFIX/lib/ecosystem.cjs"
+# Quote a value for a POSIX shell single-quoted assignment.
+shell_quote() {
+  printf "'"
+  printf '%s' "$1" | sed "s/'/'\\\\''/g"
+  printf "'"
+}
+NODE_QUOTED=$(shell_quote "$NODE")
+
+{
+  cat <<'WRAPPER_HEAD'
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH= cd "$(dirname "$0")" && pwd -P)
+WRAPPER_HEAD
+  printf 'NODE=%s\n' "$NODE_QUOTED"
+  cat <<'WRAPPER_TAIL'
+
+PM2_CLI="$ROOT/node_modules/pm2/bin/pm2"
+
+if [ ! -x "$NODE" ]; then
+  printf 'pm2-wrapper: configured Node executable is missing: %s\n' "$NODE" >&2
+  printf 'Re-run install.sh after installing the desired Node version.\n' >&2
+  exit 1
+fi
+
+if [ ! -f "$PM2_CLI" ]; then
+  printf 'pm2-wrapper: PM2 CLI not found: %s\n' "$PM2_CLI" >&2
+  printf 'Re-run install.sh to repair the installation.\n' >&2
+  exit 1
+fi
+
+# Use the normal PM2_HOME (~/.pm2) unless the caller explicitly overrides it.
+exec "$NODE" "$PM2_CLI" "$@"
+WRAPPER_TAIL
+} > "$PREFIX/pm2"
+chmod 755 "$PREFIX/pm2"
 
 printf '\nInstalled pm2-wrapper\n'
 printf '  Directory: %s\n' "$PREFIX"
 printf '  Node:      %s (%s)\n' "$NODE" "$RESOLVED_VERSION"
 printf '  PM2:       %s\n' "$("$NODE" -e 'console.log(require(process.argv[1]).version)' "$PREFIX/node_modules/pm2/package.json")"
-printf '  Command:   %s/bin/pm2\n' "$PREFIX"
-printf '  PM2_HOME:  %s/.pm2 (unless PM2_HOME is already set)\n' "$PREFIX"
+printf '  Command:   %s/pm2\n' "$PREFIX"
+printf '  Runtime dependency: none (nvm is used only during installation)\n'
