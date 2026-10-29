@@ -104,6 +104,30 @@ make install NODE_VERSION=22.21.1 NVM_DIR="$HOME/.nvm"
 
 如果目标目录中已安装 PM2，且本次未指定 PM2 版本，安装器会保留现有版本。首次安装且未指定版本时，会安装当前发布的 PM2 版本。
 
+## 更新 PM2 版本
+
+在仓库目录执行，默认更新到最新版：
+
+```sh
+make update
+```
+
+也可以在命令后指定版本，或使用 `PM2_VERSION`：
+
+```sh
+make update 6.0.0
+make update PM2_VERSION=6.0.0
+```
+
+版本号仅为示例。同时传入时，命令后的版本优先。使用自定义安装目录时，必须指定原安装目录；`NODE_VERSION` 和 `NVM_DIR` 与 `make install` 用法相同：
+
+```sh
+make update INSTALL_DIR="$HOME/services/pm2-runtime"
+make update 6.0.0 INSTALL_DIR="$HOME/services/pm2-runtime"
+```
+
+更新会先调用安装器升级 PM2 软件包并重新生成包装脚本，成功后调用该安装目录的 `pm2 update` 更新 daemon、恢复应用。安装失败时不会执行 daemon 更新。daemon 更新可能造成短暂停机；Linux 上匹配的 systemd 服务仍会展示计划并要求确认，取消后软件包已更新，可稍后重新执行 `pm2 update`。
+
 ## 安装结果
 
 安装目录包含包装脚本相关文件和本地 npm 包文件：
@@ -228,7 +252,7 @@ Linux 上，`update` 和别名 `updatePM2` 会检查 `startup.json` 或 `--servi
 
 确认、sudo 认证、`--yes`、`-u USER`、`--hp HOME`、保存失败保护和空列表保护与自启流程相同。服务启动配置与当前 wrapper 不一致、需要 daemon-reload 或无法验证时，在停止应用前退出，请先运行 `pm2 startup` 检查并修复配置。没有对应服务时透传原生更新，不创建或启用服务。macOS 继续透传原生更新。
 
-此命令更新内存中的 daemon，不安装新的 PM2 软件包。需要升级 PM2 时，先用安装器更新安装目录里的 PM2，再执行 `pm2 update`。
+此命令更新内存中的 daemon，不安装新的 PM2 软件包。需要升级 PM2 时，可以执行 `make update [VERSION]`，依次更新软件包和 daemon。
 
 该封装避免原生更新替换 daemon 时触发 `ExecStop=pm2 kill`，误停刚启动的新 daemon。参见上游 [Issue #5000](https://github.com/Unitech/pm2/issues/5000#issuecomment-6354821095)。
 
