@@ -58,7 +58,7 @@ make preview
 make preview NODE_VERSION=22.21.1
 ```
 
-预览模式会解析 Node 可执行文件并写入包装脚本；在仓库外生成预览时，还会将 `startup.cjs` 复制到脚本所在目录。它不会安装 PM2，也不会修改 `.nvmrc`、`startup.json` 或 npm 包配置文件。仓库根目录中生成的 `pm2` 文件也已被 Git 忽略。普通 PM2 命令需要该目录的 `node_modules` 中已安装 PM2；`show startup` 无需安装 PM2 即可运行。
+预览模式会解析 Node 可执行文件并写入包装脚本；在仓库外生成预览时，还会将 `startup.cjs` 和 `lifecycle.cjs` 复制到脚本所在目录。它不会安装 PM2，也不会修改 `.nvmrc`、`startup.json` 或 npm 包配置文件。仓库根目录中生成的 `pm2` 文件也已被 Git 忽略。普通 PM2 命令需要该目录的 `node_modules` 中已安装 PM2；`show startup` 无需安装 PM2 即可运行。
 
 预览会检查 `PATH` 中是否已有 `pm2` 命令，找到时显示其路径，不要求确认。预览和安装会在终端中显示各步骤标题，并高亮状态信息。输出被重定向、`TERM=dumb` 或设置了 `NO_COLOR` 时，不使用颜色。
 
@@ -111,6 +111,7 @@ make install NODE_VERSION=22.21.1 NVM_DIR="$HOME/.nvm"
 pm2-wrapper/
 ├── .nvmrc
 ├── startup.cjs
+├── lifecycle.cjs
 ├── startup.json
 ├── package.json
 ├── package-lock.json
@@ -122,7 +123,8 @@ pm2-wrapper/
 - `.nvmrc`：记录安装时解析得到的确切 Node 版本。
 - `node_modules/pm2`：本地安装的 PM2。
 - `pm2`：生成的包装命令。
-- `startup.cjs`：实现自启命令处理和只读检查。
+- `startup.cjs`：实现自启命令入口和只读检查。
+- `lifecycle.cjs`：实现交互式自启管理、应用恢复检查和 macOS 前台 daemon。
 - `startup.json`：保存可由用户编辑的自启设置，重新安装时会保留。
 
 安装器不会创建 `bin/`、`lib/`、ecosystem 辅助脚本、别名命令或每个安装目录独立的 `.pm2/` 状态目录。
@@ -160,14 +162,35 @@ export PATH="$HOME/.local/share/pm2-wrapper:$PATH"
 
 ```sh
 pm2 startup
-# 复制并执行上一步打印的 sudo 命令；Linux systemd 下会启用并立即启动服务。
+pm2 unstartup
 pm2 show startup
 pm2 show startup --service my-pm2
 ```
 
-`startup` 和 `unstartup` 会将包装脚本固定的 Node 所在 `bin` 目录放到子进程 PATH 的最前面，同时保留其他 PATH 条目。打印的 sudo 命令也会优先使用该目录，并显式使用固定的 Node 运行已安装的自启辅助脚本，同时保留 HOME 和 PM2_HOME。这样，将命令复制到其他终端执行时，就不会误用该终端中的另一个 Node。
+`startup` 和 `unstartup` 会先只读检查服务、daemon、Node 和应用状态，展示执行计划及停机影响，并询问 `是否继续执行以上操作？[y/N]`。拒绝、直接回车或输入结束都会取消，不修改服务和应用。非交互环境只展示计划；自动化执行需显式传入 `--yes`：
 
-其他 PM2 命令仍直接透传给本地 CLI。使用时，请将 `startup`、`unstartup` 或 `show startup` 放在选项之前。
+```sh
+pm2 startup --yes
+pm2 unstartup --yes
+```
+
+Linux 使用 systemd。普通用户确认计划后，程序先完成 sudo 认证，再自动执行展示的提权命令，不需要手动复制。`--yes` 只跳过操作确认，不绕过 sudo 认证；非交互 sudo 认证不可用时，操作在停止应用前失败。无需配置免密 sudo，也可以由 root 使用 `-u USER` 执行。提权前后会核对计划，确认期间状态发生变化时要求重新执行。
+
+macOS 使用当前用户 GUI 登录会话中的 LaunchAgent，无需 sudo。LaunchAgent 用固定的 Node 运行前台 PM2 daemon，并由 launchd 持续跟踪 PID、恢复进程和处理停止信号。请在目标用户登录后执行，不要使用 sudo。旧版一次性 LaunchAgent 在确认迁移后会转换为持续管理方式。
+
+执行流程按实际状态决定：
+
+- 服务、实际 daemon Node 和自启配置均正常：检查应用状态后直接结束，不重启。
+- 服务正常但自启被禁用：只启用自启，不重启。
+- 需要接管独立 daemon 或迁移运行时：备份恢复列表，保存当前应用，停止 daemon，再生成配置、启用并启动服务。独立 daemon 使用目标用户的 `pm2 kill`；服务管理的 daemon 通过 systemd 或 launchd 停止。运行中的应用会短暂停机。
+- 没有 daemon：保留已有恢复列表，在启动服务时恢复应用。
+- Linux 服务失败：先展示日志，处理独立 daemon 冲突，再按需清除失败限流并启动；`reset-failed` 不被当作故障修复本身。
+
+保存失败会在停止 daemon 前退出。当前应用列表为空时，不会覆盖已有非空恢复列表。原恢复文件会备份至 `PM2_HOME/startup-backup-*`，操作失败时也会保留。`unstartup` 会保存应用、停止 daemon、禁用并移除对应配置，保留恢复列表，供下次 `startup` 使用。
+
+启动完成后会核对服务归属、有效 PID、实际 daemon 的 Node 路径，以及应用名称、脚本路径、数量和运行状态。原先停止的应用应保持停止。经过短暂观察，PID 和服务重启次数没有变化，才返回成功。任一步失败都会返回非零退出码并显示失败步骤和诊断信息。正常运行的服务不会因保存列表中有旧应用而额外恢复这些应用。
+
+自启命令固定使用包装脚本的 Node，并保留目标用户的 HOME、PM2_HOME 和其他 PATH 条目。各应用的 `interpreter` 仍由应用配置决定。其他 PM2 命令直接透传给本地 CLI。请将 `startup`、`unstartup` 或 `show startup` 放在选项之前。
 
 自启设置保存在安装目录中，默认路径为 `~/.local/share/pm2-wrapper/startup.json`：
 
@@ -189,7 +212,7 @@ macOS 检查会处理 PM2 模板中的 `LaunchOnlyOnce=true`：一次性任务�
 
 检查过程不会运行 PM2 CLI、启动其 daemon、加载服务或写入文件。比较基准是当前包装脚本，不会读取 unode 的安装历史。系统服务注册文件仍位于 `~/Library/LaunchAgents/` 或 systemd 单元目录中，`startup.json` 不会移动这些文件。
 
-自启配置生成由 PM2 执行。在 Linux systemd 下，提权命令成功生成配置后，包装脚本会执行 `daemon-reload`、`start` 并检查服务为 `active/running` 且 MainPID 非零；启动失败或无法确认运行状态时返回非零退出码。已运行的服务不会被重启。应用列表仍需执行 `pm2 save` 保存，才能在服务启动时恢复。`show startup` 会高亮自启与运行状态：正常为绿色、未运行或禁用为黄色、失败为红色；无颜色时仍保留文字与状态标记。重定向输出、`TERM=dumb` 或设置 `NO_COLOR` 时不使用颜色。仅修改包装脚本不会迁移已运行的 daemon。`show` 将应用名 `startup` 保留给自启检查；如需查看同名应用，请直接调用本地 PM2 CLI。
+`show startup` 会高亮自启与运行状态：正常为绿色、未运行或禁用为黄色、失败为红色。无颜色时仍保留文字；重定向输出、`TERM=dumb` 或设置 `NO_COLOR` 时不使用颜色。`show` 将应用名 `startup` 保留给自启检查；如需查看同名应用，请直接调用本地 PM2 CLI。
 
 ## 卸载
 
@@ -207,7 +230,7 @@ make uninstall INSTALL_DIR="$HOME/services/pm2-runtime"
 
 也可以直接执行 `./uninstall.sh --dir DIR`。卸载时要求 PATH 中有可用的 Node.js，不会加载 nvm。
 
-卸载会移除本工具管理的运行时文件（包括 `startup.cjs` 和 `startup.json`），并从 bash、zsh 启动配置文件中移除与该安装目录匹配的 `pm2-wrapper` PATH 配置块。如果设置了 `ZDOTDIR`，也会检查该目录下的配置文件。
+卸载会移除本工具管理的运行时文件（包括 `startup.cjs`、`lifecycle.cjs` 和 `startup.json`），并从 bash、zsh 启动配置文件中移除与该安装目录匹配的 `pm2-wrapper` PATH 配置块。如果设置了 `ZDOTDIR`，也会检查该目录下的配置文件。
 
 其他 shell 设置、无关文件、Node.js、PM2 状态（`~/.pm2` 或 `PM2_HOME`）以及正在运行的进程都会保留。指向其他安装目录的 PATH 配置块也会保留。卸载后请打开新终端，以刷新 PATH。
 
@@ -257,3 +280,15 @@ npm run test:interpreter -- \
 对于 fork 模式下的 `.js` 应用，不指定 `interpreter` 时会使用应用 PATH 中的 `node`；在 ecosystem 配置中指定 `process.execPath` 时，会使用 PM2 CLI 的 Node。cluster 模式的工作进程使用 daemon 的 Node，即使配置中指定了其他 Node 路径也是如此。
 
 测试使用临时 `PM2_HOME`，退出时会清理测试应用及其 daemon，不会连接常规 PM2 daemon 或修改其进程列表。
+
+## 自启集成测试
+
+测试使用独立服务和临时 `PM2_HOME`，覆盖交互拒绝与确认、独立 daemon 接管、运行及停止应用恢复、重复启动、禁用后启用、`unstartup → startup`、空列表保护和真实服务故障恢复；结束后移除测试服务和 daemon。请用包装脚本固定的 Node 执行，并指定已安装运行时目录：
+
+```sh
+# macOS：当前 GUI 登录用户，无需 sudo。
+/path/to/pinned/node scripts/test-startup.cjs --runtime "$HOME/.local/share/pm2-wrapper"
+
+# Linux：root 执行，--user 指定实际 PM2 用户。
+/path/to/pinned/node scripts/test-startup.cjs --runtime /home/gituser/.local/share/pm2-wrapper --user gituser
+```

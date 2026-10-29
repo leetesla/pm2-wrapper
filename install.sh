@@ -248,7 +248,7 @@ NODE_QUOTED=$(shell_quote "$NODE")
 
 # Keep startup support and its user-editable settings beside the wrapper.
 if [ "$SOURCE_DIR" != "$INSTALL_DIR" ]; then
-  cp "$SOURCE_DIR/startup.cjs" "$INSTALL_DIR/startup.cjs"
+  cp "$SOURCE_DIR/startup.cjs" "$SOURCE_DIR/lifecycle.cjs" "$INSTALL_DIR/"
 fi
 if [ "$PREVIEW" -eq 0 ] && [ ! -e "$INSTALL_DIR/startup.json" ]; then
   printf '%s\n' '{"service": null}' > "$INSTALL_DIR/startup.json"

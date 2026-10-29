@@ -94,7 +94,7 @@ try {
     console.error(`│  PATH cleaned: ${file}`);
   }
   if (exists) {
-    for (const name of ['pm2', 'startup.cjs', 'startup.json', '.nvmrc', 'package.json', 'package-lock.json', 'node_modules']) {
+    for (const name of ['pm2', 'startup.cjs', 'lifecycle.cjs', 'startup.json', '.nvmrc', 'package.json', 'package-lock.json', 'node_modules']) {
       fs.rmSync(path.join(directory, name), { recursive: true, force: true });
     }
     if (fs.readdirSync(directory).length === 0) {

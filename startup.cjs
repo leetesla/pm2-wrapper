@@ -5,7 +5,6 @@ const path = require('node:path');
 const os = require('node:os');
 const { spawnSync } = require('node:child_process');
 
-const quote = (value) => "'" + value.replace(/'/g, "'\\''") + "'";
 const run = (file, args, timeout = 10000) => spawnSync(file, args, { encoding: 'utf8', timeout, maxBuffer: 4 * 1024 * 1024 });
 const useColor = () => Boolean(process.stdout.isTTY && process.env.TERM !== 'dumb' && !('NO_COLOR' in process.env));
 const highlight = (text, tone, color) => color ? `\x1b[1;${tone}m${text}\x1b[0m` : text;
@@ -24,79 +23,6 @@ function settings(root) {
     throw new Error(`无效的 service 配置：${file}`);
   }
   return config;
-}
-
-function option(args, names) {
-  for (let i = 0; i < args.length; i++) {
-    for (const name of names) {
-      if (args[i] === name) {
-        if (!args[i + 1] || args[i + 1].startsWith('-')) throw new Error(`${name} 缺少值`);
-        return args[i + 1];
-      }
-      if (args[i].startsWith(`${name}=`)) return args[i].slice(name.length + 1);
-    }
-  }
-}
-
-function startSystemdService(service, query = run) {
-  if (!/^[\w.@:-]+$/.test(service)) throw new Error('服务名称无效');
-  const unit = `${service}.service`;
-  checked(query('systemctl', ['daemon-reload']));
-  // start is idempotent: an already active daemon is not restarted.
-  checked(query('systemctl', ['start', unit], 120000));
-  const output = checked(query('systemctl', ['show', unit, '--property=ActiveState', '--property=SubState', '--property=MainPID']));
-  const values = Object.fromEntries(output.trim().split('\n').map(line => {
-    const i = line.indexOf('='); return [line.slice(0, i), line.slice(i + 1)];
-  }));
-  if (values.ActiveState !== 'active' || values.SubState !== 'running' || !/^[1-9]\d*$/.test(values.MainPID || '')) {
-    throw new Error(`${unit} 未正常运行：${values.ActiveState}/${values.SubState}；MainPID=${values.MainPID}`);
-  }
-  return `${unit}：active/running；MainPID=${values.MainPID}`;
-}
-
-function startup(args, root, config, {
-  platform = process.platform, uid = process.getuid?.(), execute = spawnSync,
-  query = run, stdout = process.stdout, stderr = process.stderr,
-} = {}) {
-  const cli = path.join(root, 'node_modules/pm2/bin/pm2');
-  if (!fs.existsSync(cli)) throw new Error(`PM2 CLI 不存在：${cli}`);
-  args = [...args];
-  if (config.service && !option(args, ['--service-name'])) {
-    const suffix = platform === 'darwin' ? /\.plist$/ : /\.service$/;
-    args.push('--service-name', config.service.replace(suffix, ''));
-  }
-  const home = option(args, ['--hp']) || os.homedir();
-  const user = option(args, ['-u', '--user']) || os.userInfo().username;
-  const nodeBin = path.dirname(process.execPath);
-  const originalPath = process.env.PATH || '';
-  const pinnedPath = originalPath === nodeBin || originalPath.startsWith(`${nodeBin}:`) ? originalPath : `${nodeBin}${originalPath ? ':' + originalPath : ''}`;
-  const env = { ...process.env, PATH: pinnedPath, _: process.execPath };
-  // PM2 stores this PATH in its service definition. Do not remove other tools.
-  const result = execute(process.execPath, [cli, ...args], { env, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
-  if (result.error) throw result.error;
-  const elevatedArgs = [...args];
-  if (!option(args, ['-u', '--user'])) elevatedArgs.push('-u', user);
-  if (!option(args, ['--hp']) && !process.env.PM2_HOME) elevatedArgs.push('--hp', home);
-  // Re-enter this helper after sudo so both the generated command and saved
-  // service PATH use the pinned Node, even when pasted into a different shell.
-  const command = [
-    'sudo env', `PATH=${quote(nodeBin)}:"$PATH"`, `HOME=${quote(os.homedir())}`,
-    `PM2_HOME=${quote(process.env.PM2_HOME || path.join(home, '.pm2'))}`,
-    quote(process.execPath), quote(path.join(root, 'startup.cjs')), ...elevatedArgs.map(quote),
-  ].join(' ');
-  stdout.write((result.stdout || '').replace(/^sudo env PATH=.*$/gm, () => command));
-  stderr.write(result.stderr || '');
-  const init = args[1]?.startsWith('-') ? undefined : args[1];
-  const systemd = init ? ['systemd', 'ubuntu', 'centos', 'arch', 'oracle'].includes(init) :
-    /^Platform\s+(systemd|ubuntu|centos|arch|oracle)\s*$/m.test((result.stdout || '').replace(/\x1b\[[0-9;]*m/g, ''));
-  if (result.status === 0 && args[0] === 'startup' && uid === 0 && platform === 'linux' &&
-      systemd) {
-    const service = option(args, ['--service-name']) || `pm2-${user}`;
-    stdout.write(`\n[pm2-wrapper] 启动并检查 systemd 服务 ${service}\n`);
-    const state = startSystemdService(service, query);
-    stdout.write(`${highlight(`✓ ${state}`, 32, useColor())}\n`);
-  }
-  return result.status ?? 1;
 }
 
 // Tokenize the small shell subset used by PM2 templates. Never evaluate config.
@@ -193,15 +119,24 @@ function macStatus(config, file, query = run) {
   } catch (error) { enabled += `：${error.message}`; uncertain = true; }
   const states = [];
   let loaded = false;
+  let running = false, failed = false;
   for (const scope of [domain, `user/${uid}`, 'system']) {
     const result = query('/bin/launchctl', ['print', `${scope}/${config.Label}`]);
-    if (result.status === 0) { loaded = true; states.push(result.stdout.trim()); }
+    if (result.status === 0) {
+      loaded = true;
+      const state = result.stdout.match(/^\s*state = (.+)$/m)?.[1] || '已注册';
+      const pid = result.stdout.match(/^\s*pid = (\d+)/m)?.[1] || '0';
+      const exit = result.stdout.match(/^\s*last exit code = (\d+)/m)?.[1];
+      running ||= state === 'running' && pid !== '0';
+      failed ||= Boolean(exit && exit !== '0' && state !== 'running');
+      states.push(`${scope}：${state}；MainPID=${pid}${exit ? `；LastExitCode=${exit}` : ''}`);
+    }
     else if (!`${result.stderr || ''}${result.stdout || ''}`.includes(`Could not find service "${config.Label}" in domain`)) {
       states.push(`${scope} 查询失败：${result.error?.message || result.stderr || result.stdout}`); uncertain = true;
     }
   }
   if (!loaded) states.push(config.LaunchOnlyOnce === true ? '一次性启动任务当前未注册；不能据此判断 PM2 后台已停止。' : '当前未加载。');
-  return { enabled, state: states.join('\n'), uncertain };
+  return { enabled, state: states.join('\n'), stateTone: running ? 32 : failed ? 31 : 33, uncertain };
 }
 
 function linuxConfig(service, query = run) {
@@ -278,12 +213,13 @@ function main(args) {
   const root = __dirname;
   const config = settings(root);
   if (args[0] === 'show' && args[1] === 'startup') return show(args.slice(2), config);
-  if (['startup', 'unstartup'].includes(args[0])) return startup(args, root, config);
+  if (['startup', 'unstartup'].includes(args[0])) return require('./lifecycle.cjs').lifecycle(args, root, config);
   throw new Error('用法：pm2 startup | pm2 unstartup | pm2 show startup');
 }
 
+module.exports = { words, resolveNode, macStatus, linuxConfig, linuxNode, show };
 if (require.main === module) {
-  try { process.exitCode = main(process.argv.slice(2)); }
-  catch (error) { console.error(`pm2-wrapper: ${error.message}`); process.exitCode = 2; }
+  Promise.resolve().then(() => main(process.argv.slice(2))).then(code => { process.exitCode = code; }).catch(error => {
+    console.error(`pm2-wrapper: ${error.message}`); process.exitCode = 2;
+  });
 }
-module.exports = { startup, startSystemdService, words, resolveNode, macStatus, linuxConfig, linuxNode, show };

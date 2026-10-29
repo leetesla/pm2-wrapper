@@ -111,55 +111,24 @@ test('reinstall preserves startup configuration', (t) => {
   assert.equal(readFileSync(join(destination, 'startup.json'), 'utf8'), config);
 });
 
-test('startup command survives copying into a shell with another Node first in PATH', (t) => {
+test('startup plans and cancels without invoking PM2, while ordinary commands still pass through', (t) => {
   const { destination, bin, home, run } = fixture(t, false, {
     directoryName: "runtime with spaces 'quoted' $literal `value`",
   });
   assert.equal(run('').status, 0);
-  // First emulate PM2's unprivileged hint, then emulate the elevated startup
-  // process. A fake sudo simply executes env; no privileges/services are used.
-  writeFileSync(join(destination, 'node_modules/pm2/bin/pm2'), `
-if (!process.argv.includes('-u')) {
-  console.log('sudo env PATH=$PATH:/wrong/node/bin pm2 startup');
-  console.error('original diagnostic');
-  process.exitCode = 1;
-} else {
-  console.log(JSON.stringify({node: process.execPath, path: process.env.PATH, home: process.env.HOME, pm2Home: process.env.PM2_HOME, args: process.argv.slice(2)}));
-}
-`);
-  writeFileSync(join(bin, 'sudo'), '#!/bin/sh\nexec "$@"\n', { mode: 0o755 });
-  writeFileSync(join(bin, 'node'), '#!/bin/sh\necho WRONG_NODE >&2\nexit 88\n', { mode: 0o755 });
-  const env = { ...process.env, HOME: home, PATH: `${bin}:/usr/bin:/bin`, PM2_HOME: join(home, 'custom state') };
-  const hint = spawnSync(join(destination, 'pm2'), ['startup', 'launchd', '--service-name', 'custom-pm2'], { env, encoding: 'utf8' });
-  assert.equal(hint.status, 1, hint.stderr);
-  assert.match(hint.stderr, /original diagnostic/);
-  const result = spawnSync('/bin/sh', ['-c', hint.stdout.trim()], { env, encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr);
-  const report = JSON.parse(result.stdout);
-  assert.equal(report.node, process.execPath);
-  assert.equal(report.path.split(':')[0], dirname(process.execPath));
-  assert.ok(report.path.includes(bin));
-  assert.equal(report.home, home);
-  assert.equal(report.pm2Home, env.PM2_HOME);
-  assert.deepEqual(report.args.slice(0, 4), ['startup', 'launchd', '--service-name', 'custom-pm2']);
-});
-
-test('startup/unstartup prepend pinned Node and honor configured service', (t) => {
-  const { destination, bin, home, run } = fixture(t, false);
-  assert.equal(run('').status, 0);
-  writeFileSync(join(destination, 'startup.json'), '{"service":"custom-pm2"}');
-  writeFileSync(join(destination, 'node_modules/pm2/bin/pm2'), 'console.log(JSON.stringify({args:process.argv.slice(2),path:process.env.PATH}));');
-  for (const command of ['startup', 'unstartup']) {
-    const result = spawnSync(join(destination, 'pm2'), [command], { encoding: 'utf8', env: { ...process.env, HOME: home, PATH: `${bin}:/usr/bin:/bin` } });
-    assert.equal(result.status, 0, result.stderr);
-    const report = JSON.parse(result.stdout);
-    assert.deepEqual(report.args, [command, '--service-name', 'custom-pm2']);
-    assert.equal(report.path.split(':')[0], dirname(process.execPath));
-  }
-  // Existing PM2 commands are forwarded without changing their arguments.
-  const normal = spawnSync(join(destination, 'pm2'), ['show', 'my-app'], { encoding: 'utf8' });
+  assert.equal(existsSync(join(destination, 'lifecycle.cjs')), true);
+  const service = `pm2-wrapper-unit-test-${process.pid}`;
+  writeFileSync(join(destination, 'startup.json'), JSON.stringify({ service }));
+  writeFileSync(join(destination, 'node_modules/pm2/bin/pm2'), 'if(process.argv[2]!=="show")throw Error("must not execute before confirmation"); console.log(JSON.stringify(process.argv.slice(2)));');
+  const env = { ...process.env, HOME: home, PM2_HOME: join(home, 'state'), PATH: `${bin}:/usr/bin:/bin` };
+  const result = spawnSync(join(destination, 'pm2'), ['startup'], { env, encoding: 'utf8' });
+  assert.equal(result.status, 1, result.stderr);
+  assert.ok(result.stdout.includes(service));
+  assert.ok(result.stdout.includes(process.execPath));
+  assert.match(result.stdout, /已取消/);
+  const normal = spawnSync(join(destination, 'pm2'), ['show', 'my-app'], { env, encoding: 'utf8' });
   assert.equal(normal.status, 0, normal.stderr);
-  assert.deepEqual(JSON.parse(normal.stdout).args, ['show', 'my-app']);
+  assert.deepEqual(JSON.parse(normal.stdout), ['show', 'my-app']);
 });
 
 test('show startup works without PM2 installed and rejects invalid arguments', (t) => {
