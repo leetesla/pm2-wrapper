@@ -1,6 +1,6 @@
 # pm2-wrapper
 
-A small installer that creates a **single PM2 wrapper command** using a fixed Node.js executable. nvm is used only during installation to resolve the Node path; the generated command does not call nvm.
+A small installer that creates a **single PM2 wrapper command** using a fixed Node.js executable. nvm is used only during installation or preview generation to resolve the Node path; the generated command does not call nvm.
 
 ## What it does
 
@@ -19,6 +19,22 @@ It does **not** manage the Node version of each application. Configure an applic
 - The selected Node installation's npm available through nvm.
 
 nvm is required only while installing or regenerating the wrapper. Running the generated `pm2` command does not source `nvm.sh`.
+
+## Preview the generated wrapper
+
+To generate a preview script named `./pm2` in the current repository directory:
+
+```sh
+make preview NODE_VERSION=22.21.1
+```
+
+Replace the version with one already installed in nvm. If the current directory has a suitable `.nvmrc`, you can run `make preview` without specifying `NODE_VERSION`. To use a non-default nvm installation:
+
+```sh
+make preview NODE_VERSION=22.21.1 NVM_DIR="$HOME/.nvm"
+```
+
+Preview mode only resolves the Node executable and writes the wrapper script. It does not install PM2, modify `.nvmrc`, or change package files. The generated root-level `pm2` file is listed in `.gitignore`, so it will not be committed accidentally. It is for inspecting the generated script; it will not run successfully from the repository unless PM2 is installed under that directory's `node_modules`.
 
 ## Install
 
@@ -100,6 +116,6 @@ A running PM2 daemon does not change its runtime merely because the wrapper is r
 ```sh
 sh -n install.sh
 ./install.sh --help
+make -n preview NODE_VERSION=22.21.1
 npm test
 ```
-

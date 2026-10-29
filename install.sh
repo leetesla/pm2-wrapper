@@ -5,16 +5,18 @@ usage() {
   cat <<'USAGE'
 Usage:
   ./install.sh --dir DIR [--node-version VERSION] [--pm2-version VERSION] [--nvm-dir DIR]
+  ./install.sh --preview [--node-version VERSION] [--nvm-dir DIR]
 
 Options:
-  --dir DIR             Installation directory (required)
-  --node-version VER    Set the Node version used by PM2
+  --dir DIR             Installation directory (required unless --preview)
+  --node-version VER    Node version used by PM2
   --pm2-version VER     Install an exact PM2 version or npm dist-tag
   --nvm-dir DIR         nvm directory (default: $NVM_DIR or $HOME/.nvm)
+  --preview             Generate ./pm2 here without installing PM2 or changing .nvmrc
   -h, --help            Show this help
 
-The selected Node version must already be installed. nvm is used only during
-installation to resolve the absolute Node executable path.
+The selected Node version must already be installed. nvm is used only to
+resolve the absolute Node executable path; the generated command does not use nvm.
 USAGE
 }
 
@@ -24,9 +26,10 @@ fail() {
 }
 
 PREFIX=
-NODE_VERSION=
+NODE_VERSION=${PM2_WRAPPER_NODE_VERSION:-}
 PM2_VERSION=
 CUSTOM_NVM_DIR=
+PREVIEW=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -50,6 +53,10 @@ while [ "$#" -gt 0 ]; do
       CUSTOM_NVM_DIR=$2
       shift 2
       ;;
+    --preview)
+      PREVIEW=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -61,10 +68,15 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-[ -n "$PREFIX" ] || {
-  usage >&2
-  fail "--dir is required"
-}
+if [ "$PREVIEW" -eq 1 ]; then
+  [ -z "$PREFIX" ] || fail "--dir cannot be combined with --preview"
+  PREFIX=$PWD
+else
+  [ -n "$PREFIX" ] || {
+    usage >&2
+    fail "--dir is required"
+  }
+fi
 
 case "$PREFIX" in
   /*) ;;
@@ -85,10 +97,13 @@ export NVM_DIR
 
 [ -s "$NVM_DIR/nvm.sh" ] || fail "nvm.sh not found at $NVM_DIR/nvm.sh (use --nvm-dir to set the nvm directory)"
 if [ -z "$NODE_VERSION" ] && [ ! -s "$PREFIX/.nvmrc" ]; then
+  if [ "$PREVIEW" -eq 1 ]; then
+    fail "no .nvmrc in the current directory; use: make preview NODE_VERSION=VERSION"
+  fi
   fail "no $PREFIX/.nvmrc found; provide --node-version VERSION"
 fi
 
-# nvm is used here only to resolve the Node binary. The generated command
+# nvm is used only here to resolve the Node binary. The generated command
 # contains the absolute path and does not source nvm at runtime.
 # shellcheck disable=SC1090
 . "$NVM_DIR/nvm.sh"
@@ -106,11 +121,12 @@ NODE=$(nvm which)
 [ -x "$NODE" ] || fail "nvm returned a non-executable Node path: $NODE"
 RESOLVED_VERSION=$("$NODE" --version)
 
-if [ -f "$PREFIX/package.json" ]; then
-  PACKAGE_NAME=$("$NODE" -e 'console.log(require(process.argv[1]).name || "")' "$PREFIX/package.json")
-  [ "$PACKAGE_NAME" = "pm2-wrapper-runtime" ] || fail "$PREFIX/package.json belongs to '$PACKAGE_NAME'; use a dedicated installation directory"
-else
-  cat > "$PREFIX/package.json" <<'PACKAGE'
+if [ "$PREVIEW" -eq 0 ]; then
+  if [ -f "$PREFIX/package.json" ]; then
+    PACKAGE_NAME=$("$NODE" -e 'console.log(require(process.argv[1]).name || "")' "$PREFIX/package.json")
+    [ "$PACKAGE_NAME" = "pm2-wrapper-runtime" ] || fail "$PREFIX/package.json belongs to '$PACKAGE_NAME'; use a dedicated installation directory"
+  else
+    cat > "$PREFIX/package.json" <<'PACKAGE'
 {
   "name": "pm2-wrapper-runtime",
   "version": "0.0.0",
@@ -118,18 +134,19 @@ else
   "description": "Private runtime directory managed by pm2-wrapper"
 }
 PACKAGE
+  fi
+
+  # Store an exact version, even if the input was an alias such as "22".
+  printf '%s\n' "${RESOLVED_VERSION#v}" > "$PREFIX/.nvmrc"
+
+  if [ -z "$PM2_VERSION" ] && [ -f "$PREFIX/node_modules/pm2/package.json" ]; then
+    PM2_VERSION=$("$NODE" -e 'console.log(require(process.argv[1]).version)' "$PREFIX/node_modules/pm2/package.json")
+  fi
+  PM2_VERSION=${PM2_VERSION:-latest}
+
+  # nvm use prepends this Node installation to PATH, so npm runs under this Node.
+  npm install --prefix "$PREFIX" --save-exact "pm2@$PM2_VERSION"
 fi
-
-# Store an exact version, even if the input was an alias such as "22".
-printf '%s\n' "${RESOLVED_VERSION#v}" > "$PREFIX/.nvmrc"
-
-if [ -z "$PM2_VERSION" ] && [ -f "$PREFIX/node_modules/pm2/package.json" ]; then
-  PM2_VERSION=$("$NODE" -e 'console.log(require(process.argv[1]).version)' "$PREFIX/node_modules/pm2/package.json")
-fi
-PM2_VERSION=${PM2_VERSION:-latest}
-
-# nvm use prepends this Node installation to PATH, so npm runs under this Node.
-npm install --prefix "$PREFIX" --save-exact "pm2@$PM2_VERSION"
 
 # Quote a value for a POSIX shell single-quoted assignment.
 shell_quote() {
@@ -169,9 +186,15 @@ WRAPPER_TAIL
 } > "$PREFIX/pm2"
 chmod 755 "$PREFIX/pm2"
 
-printf '\nInstalled pm2-wrapper\n'
-printf '  Directory: %s\n' "$PREFIX"
-printf '  Node:      %s (%s)\n' "$NODE" "$RESOLVED_VERSION"
-printf '  PM2:       %s\n' "$("$NODE" -e 'console.log(require(process.argv[1]).version)' "$PREFIX/node_modules/pm2/package.json")"
-printf '  Command:   %s/pm2\n' "$PREFIX"
-printf '  Runtime dependency: none (nvm is used only during installation)\n'
+if [ "$PREVIEW" -eq 1 ]; then
+  printf 'Generated wrapper preview: %s/pm2\n' "$PREFIX"
+  printf '  Node: %s (%s)\n' "$NODE" "$RESOLVED_VERSION"
+  printf '  Note: PM2 is not installed by preview mode.\n'
+else
+  printf '\nInstalled pm2-wrapper\n'
+  printf '  Directory: %s\n' "$PREFIX"
+  printf '  Node:      %s (%s)\n' "$NODE" "$RESOLVED_VERSION"
+  printf '  PM2:       %s\n' "$("$NODE" -e 'console.log(require(process.argv[1]).version)' "$PREFIX/node_modules/pm2/package.json")"
+  printf '  Command:   %s/pm2\n' "$PREFIX"
+  printf '  Runtime dependency: none (nvm is used only during installation)\n'
+fi
