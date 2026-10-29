@@ -281,6 +281,23 @@ npm run test:interpreter -- \
 
 测试使用临时 `PM2_HOME`，退出时会清理测试应用及其 daemon，不会连接常规 PM2 daemon 或修改其进程列表。
 
+### Node 版本实测结果（2026-10-29）
+
+本次使用已有的 PM2 **7.1.1**，保持包装脚本固定的 Node **20.20.0** 不变，只将测试启动环境 PATH 中的 Node 设为 **22.23.4**。
+
+本次 ecosystem 配置中的 `process.execPath` 由读取配置的 PM2 CLI 求值，指向 **Node 20.20.0** 的可执行文件，即 `$HOME/.nvm/versions/node/v20.20.0/bin/node`（这里用 `$HOME` 代替用户主目录）。它不是当前终端 PATH 中的 Node 22.23.4；后者的路径为 `$HOME/.nvm/versions/node/v22.23.4/bin/node`。`process.execPath` 本身并不固定某个版本，其值取决于执行该配置的 Node。
+
+| 运行模式 | `interpreter` 配置及其对应版本 | 应用实际使用的 Node |
+| --- | --- | --- |
+| fork | 不指定，默认通过应用 PATH 查找 `node` | **22.23.4** |
+| fork | `process.execPath`，对应 Node **20.20.0** 的绝对路径 | **20.20.0** |
+| fork | 指定 Node **22.23.4** 的绝对路径 | **22.23.4** |
+| cluster | 不指定 | **20.20.0** |
+| cluster | `process.execPath`，对应 Node **20.20.0** 的绝对路径 | **20.20.0** |
+| cluster | 指定 Node **22.23.4** 的绝对路径 | **20.20.0** |
+
+六组测试均通过，已同时校验应用报告的 Node 版本、可执行文件路径和实际运行模式。结果表明：fork 模式可以通过 `interpreter` 选择应用的 Node；cluster 模式下，即使指定 Node 22.23.4 的路径，工作进程仍使用本次隔离 daemon 的 Node 20.20.0。
+
 ## 自启集成测试
 
 测试使用独立服务和临时 `PM2_HOME`，覆盖交互拒绝与确认、独立 daemon 接管、运行及停止应用恢复、重复启动、禁用后启用、`unstartup → startup`、空列表保护和真实服务故障恢复；结束后移除测试服务和 daemon。请用包装脚本固定的 Node 执行，并指定已安装运行时目录：
