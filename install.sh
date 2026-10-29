@@ -118,10 +118,9 @@ else
 PACKAGE
 fi
 
-# Only write .nvmrc after confirming the target is owned by this tool.
-if [ -n "$NODE_VERSION" ]; then
-  printf '%s\n' "$NODE_VERSION" > "$PREFIX/.nvmrc"
-fi
+# Pin the resolved version, even when the input .nvmrc used an alias such as "22".
+RESOLVED_VERSION=$("$NODE" --version)
+printf '%s\n' "${RESOLVED_VERSION#v}" > "$PREFIX/.nvmrc"
 
 if [ -z "$PM2_VERSION" ] && [ -f "$PREFIX/node_modules/pm2/package.json" ]; then
   PM2_VERSION=$("$NODE" -e 'console.log(require(process.argv[1]).version)' "$PREFIX/node_modules/pm2/package.json")
@@ -143,7 +142,7 @@ chmod 644 "$PREFIX/lib/ecosystem.cjs"
 
 printf '\nInstalled pm2-wrapper\n'
 printf '  Directory: %s\n' "$PREFIX"
-printf '  Node:      %s (%s)\n' "$NODE" "$("$NODE" --version)"
+printf '  Node:      %s (%s)\n' "$NODE" "$RESOLVED_VERSION"
 printf '  PM2:       %s\n' "$("$NODE" -e 'console.log(require(process.argv[1]).version)' "$PREFIX/node_modules/pm2/package.json")"
 printf '  Command:   %s/bin/pm2\n' "$PREFIX"
 printf '  PM2_HOME:  %s/.pm2 (unless PM2_HOME is already set)\n' "$PREFIX"
