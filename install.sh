@@ -1,6 +1,36 @@
 #!/bin/sh
 set -eu
 
+# Clack-style guide, matching unode's terminal output. Keep logs ANSI-free.
+UI_CYAN= UI_YELLOW= UI_GREEN= UI_RED= UI_DIM= UI_RESET=
+if [ -t 2 ] && [ "${TERM:-}" != dumb ] && [ "${NO_COLOR+x}" != x ]; then
+  UI_CYAN=$(printf '\033[1;36m')
+  UI_YELLOW=$(printf '\033[1;33m')
+  UI_GREEN=$(printf '\033[1;32m')
+  UI_RED=$(printf '\033[1;31m')
+  UI_DIM=$(printf '\033[2m')
+  UI_RESET=$(printf '\033[0m')
+fi
+
+highlight() {
+  printf '%s%s%s' "${2:-$UI_CYAN}" "$1" "$UI_RESET"
+}
+
+ui() {
+  printf '%s│%s  %s\n' "$UI_DIM" "$UI_RESET" "${1:-}" >&2
+}
+
+section() {
+  ui
+  printf '%s◇  %s%s\n' "$UI_CYAN" "$1" "$UI_RESET" >&2
+  ui
+}
+
+outro() {
+  ui
+  printf '%s└  %s%s\n\n' "${2:-$UI_GREEN}" "$1" "$UI_RESET" >&2
+}
+
 usage() {
   cat <<'USAGE'
 Usage:
@@ -13,6 +43,7 @@ Options:
   --pm2-version VER     Install an exact PM2 version or npm dist-tag
   --nvm-dir DIR         nvm directory (default: $NVM_DIR or $HOME/.nvm)
   --preview             Generate ./pm2 here without installing PM2 or changing .nvmrc
+  --no-modify-path      Do not update shell startup files
   -h, --help            Show this help
 
 The selected Node version must already be installed. nvm is used only to
@@ -21,21 +52,27 @@ USAGE
 }
 
 fail() {
-  printf 'pm2-wrapper: %s\n' "$*" >&2
+  printf '%spm2-wrapper: %s%s\n' "$UI_RED" "$*" "$UI_RESET" >&2
   exit 1
 }
 
-PREFIX=
+# Keep the destination separate from PREFIX, which the sourced nvm.sh checks.
+INSTALL_DIR=
+SOURCE_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd -P)
 NODE_VERSION=${PM2_WRAPPER_NODE_VERSION:-}
 PM2_VERSION=
 CUSTOM_NVM_DIR=
 PREVIEW=0
+MODIFY_PATH=1
+# The installer runs under sh; SHELL identifies the user's configured shell.
+USER_SHELL=${SHELL:-}
+USER_SHELL=${USER_SHELL##*/}
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dir)
       [ "$#" -ge 2 ] || fail "--dir requires a path"
-      PREFIX=$2
+      INSTALL_DIR=$2
       shift 2
       ;;
     --node-version)
@@ -57,6 +94,10 @@ while [ "$#" -gt 0 ]; do
       PREVIEW=1
       shift
       ;;
+    --no-modify-path)
+      MODIFY_PATH=0
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -69,21 +110,63 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ "$PREVIEW" -eq 1 ]; then
-  [ -z "$PREFIX" ] || fail "--dir cannot be combined with --preview"
-  PREFIX=$PWD
+  [ -z "$INSTALL_DIR" ] || fail "--dir cannot be combined with --preview"
+  INSTALL_DIR=$PWD
 else
-  [ -n "$PREFIX" ] || {
+  [ -n "$INSTALL_DIR" ] || {
     usage >&2
     fail "--dir is required"
   }
 fi
 
-case "$PREFIX" in
+case "$INSTALL_DIR" in
   /*) ;;
-  *) PREFIX="$PWD/$PREFIX" ;;
+  *) INSTALL_DIR="$PWD/$INSTALL_DIR" ;;
 esac
-mkdir -p "$PREFIX"
-PREFIX=$(CDPATH= cd "$PREFIX" && pwd -P)
+
+if [ "$PREVIEW" -eq 1 ]; then
+  MODE=preview
+else
+  MODE=install
+fi
+printf '\n%s┌  pm2-wrapper · %s%s\n' "$UI_CYAN" "$MODE" "$UI_RESET" >&2
+
+# Report before making any changes. Preview only reports; installation asks
+# unless the command (including symlinks) already points to this wrapper.
+section 'Check existing PM2'
+EXISTING_PM2=$(command -v pm2 || true)
+if [ -n "$EXISTING_PM2" ]; then
+  if [ "$EXISTING_PM2" -ef "$INSTALL_DIR/pm2" ]; then
+    ui "$(highlight 'Existing PM2 command is this installation wrapper.' "$UI_GREEN")"
+    ui "Path: $(highlight "$EXISTING_PM2")"
+  else
+    ui "$(highlight "Existing PM2 command found: $EXISTING_PM2" "$UI_YELLOW")"
+    ui "$(highlight 'Both commands use ~/.pm2 unless PM2_HOME is set.' "$UI_YELLOW")"
+    if [ "$PREVIEW" -eq 0 ]; then
+      printf '%s│%s  %sContinue installation? [y/N]%s ' "$UI_DIM" "$UI_RESET" "$UI_YELLOW" "$UI_RESET" >&2
+      ANSWER=
+      if ! IFS= read -r ANSWER; then
+        ANSWER=
+      fi
+      if [ ! -t 0 ]; then printf '\n' >&2; fi
+      case "$ANSWER" in
+        y|Y) ;;
+        *)
+          outro 'Installation cancelled.' "$UI_YELLOW"
+          exit 1
+          ;;
+      esac
+    else
+      ui 'Preview only; no confirmation required.'
+    fi
+  fi
+else
+  ui "$(highlight 'No PM2 command found in PATH.' "$UI_GREEN")"
+fi
+
+section 'Resolve Node.js'
+mkdir -p "$INSTALL_DIR"
+INSTALL_DIR=$(CDPATH= cd "$INSTALL_DIR" && pwd -P)
 
 if [ -n "$CUSTOM_NVM_DIR" ]; then
   case "$CUSTOM_NVM_DIR" in
@@ -96,37 +179,41 @@ fi
 export NVM_DIR
 
 [ -s "$NVM_DIR/nvm.sh" ] || fail "nvm.sh not found at $NVM_DIR/nvm.sh (use --nvm-dir to set the nvm directory)"
-if [ -z "$NODE_VERSION" ] && [ ! -s "$PREFIX/.nvmrc" ]; then
+if [ -z "$NODE_VERSION" ] && [ ! -s "$INSTALL_DIR/.nvmrc" ]; then
   if [ "$PREVIEW" -eq 1 ]; then
     fail "no .nvmrc in the current directory; use: make preview NODE_VERSION=VERSION"
   fi
-  fail "no $PREFIX/.nvmrc found; provide --node-version VERSION"
+  fail "no $INSTALL_DIR/.nvmrc found; provide --node-version VERSION"
 fi
 
 # nvm is used only here to resolve the Node binary. The generated command
 # contains the absolute path and does not source nvm at runtime.
 # shellcheck disable=SC1090
 . "$NVM_DIR/nvm.sh"
-cd "$PREFIX"
+cd "$INSTALL_DIR"
 
 if [ -n "$NODE_VERSION" ]; then
   if ! nvm use "$NODE_VERSION" --silent >/dev/null; then
     fail "Node version $NODE_VERSION is not available; install it first with: nvm install $NODE_VERSION"
   fi
 elif ! nvm use --silent >/dev/null; then
-  fail "Node version in $PREFIX/.nvmrc is not available; install it first with: nvm install"
+  fail "Node version in $INSTALL_DIR/.nvmrc is not available; install it first with: nvm install"
 fi
 
-NODE=$(nvm which)
+# Resolve the version selected above without re-reading .nvmrc or its status output.
+NODE=$(nvm which current)
 [ -x "$NODE" ] || fail "nvm returned a non-executable Node path: $NODE"
 RESOLVED_VERSION=$("$NODE" --version)
+ui "Node: $(highlight "$RESOLVED_VERSION")"
+ui "Executable: $(highlight "$NODE")"
 
 if [ "$PREVIEW" -eq 0 ]; then
-  if [ -f "$PREFIX/package.json" ]; then
-    PACKAGE_NAME=$("$NODE" -e 'console.log(require(process.argv[1]).name || "")' "$PREFIX/package.json")
-    [ "$PACKAGE_NAME" = "pm2-wrapper-runtime" ] || fail "$PREFIX/package.json belongs to '$PACKAGE_NAME'; use a dedicated installation directory"
+  section 'Install PM2'
+  if [ -f "$INSTALL_DIR/package.json" ]; then
+    PACKAGE_NAME=$("$NODE" -e 'console.log(require(process.argv[1]).name || "")' "$INSTALL_DIR/package.json")
+    [ "$PACKAGE_NAME" = "pm2-wrapper-runtime" ] || fail "$INSTALL_DIR/package.json belongs to '$PACKAGE_NAME'; use a dedicated installation directory"
   else
-    cat > "$PREFIX/package.json" <<'PACKAGE'
+    cat > "$INSTALL_DIR/package.json" <<'PACKAGE'
 {
   "name": "pm2-wrapper-runtime",
   "version": "0.0.0",
@@ -137,17 +224,20 @@ PACKAGE
   fi
 
   # Store an exact version, even if the input was an alias such as "22".
-  printf '%s\n' "${RESOLVED_VERSION#v}" > "$PREFIX/.nvmrc"
+  printf '%s\n' "${RESOLVED_VERSION#v}" > "$INSTALL_DIR/.nvmrc"
 
-  if [ -z "$PM2_VERSION" ] && [ -f "$PREFIX/node_modules/pm2/package.json" ]; then
-    PM2_VERSION=$("$NODE" -e 'console.log(require(process.argv[1]).version)' "$PREFIX/node_modules/pm2/package.json")
+  if [ -z "$PM2_VERSION" ] && [ -f "$INSTALL_DIR/node_modules/pm2/package.json" ]; then
+    PM2_VERSION=$("$NODE" -e 'console.log(require(process.argv[1]).version)' "$INSTALL_DIR/node_modules/pm2/package.json")
   fi
   PM2_VERSION=${PM2_VERSION:-latest}
+  ui "Directory: $(highlight "$INSTALL_DIR")"
+  ui "PM2 version: $(highlight "$PM2_VERSION")"
 
   # nvm use prepends this Node installation to PATH, so npm runs under this Node.
-  npm install --prefix "$PREFIX" --save-exact "pm2@$PM2_VERSION"
+  npm install --prefix "$INSTALL_DIR" --save-exact "pm2@$PM2_VERSION"
 fi
 
+section 'Generate wrapper'
 # Quote a value for a POSIX shell single-quoted assignment.
 shell_quote() {
   printf "'"
@@ -155,6 +245,14 @@ shell_quote() {
   printf "'"
 }
 NODE_QUOTED=$(shell_quote "$NODE")
+
+# Keep startup support and its user-editable settings beside the wrapper.
+if [ "$SOURCE_DIR" != "$INSTALL_DIR" ]; then
+  cp "$SOURCE_DIR/startup.cjs" "$INSTALL_DIR/startup.cjs"
+fi
+if [ "$PREVIEW" -eq 0 ] && [ ! -e "$INSTALL_DIR/startup.json" ]; then
+  printf '%s\n' '{"service": null}' > "$INSTALL_DIR/startup.json"
+fi
 
 {
   cat <<'WRAPPER_HEAD'
@@ -174,6 +272,15 @@ if [ ! -x "$NODE" ]; then
   exit 1
 fi
 
+case "${1-}" in
+  startup|unstartup) exec "$NODE" "$ROOT/startup.cjs" "$@" ;;
+  show)
+    if [ "${2-}" = startup ]; then
+      exec "$NODE" "$ROOT/startup.cjs" "$@"
+    fi
+    ;;
+esac
+
 if [ ! -f "$PM2_CLI" ]; then
   printf 'pm2-wrapper: PM2 CLI not found: %s\n' "$PM2_CLI" >&2
   printf 'Re-run install.sh to repair the installation.\n' >&2
@@ -183,18 +290,65 @@ fi
 # Use the normal PM2_HOME (~/.pm2) unless the caller explicitly overrides it.
 exec "$NODE" "$PM2_CLI" "$@"
 WRAPPER_TAIL
-} > "$PREFIX/pm2"
-chmod 755 "$PREFIX/pm2"
+} > "$INSTALL_DIR/pm2"
+chmod 755 "$INSTALL_DIR/pm2"
+ui "Command: $(highlight "$INSTALL_DIR/pm2")"
 
 if [ "$PREVIEW" -eq 1 ]; then
-  printf 'Generated wrapper preview: %s/pm2\n' "$PREFIX"
-  printf '  Node: %s (%s)\n' "$NODE" "$RESOLVED_VERSION"
-  printf '  Note: PM2 is not installed by preview mode.\n'
+  ui 'Note: PM2 is not installed by preview mode.'
+  outro '✓ Generated wrapper preview'
 else
-  printf '\nInstalled pm2-wrapper\n'
-  printf '  Directory: %s\n' "$PREFIX"
-  printf '  Node:      %s (%s)\n' "$NODE" "$RESOLVED_VERSION"
-  printf '  PM2:       %s\n' "$("$NODE" -e 'console.log(require(process.argv[1]).version)' "$PREFIX/node_modules/pm2/package.json")"
-  printf '  Command:   %s/pm2\n' "$PREFIX"
-  printf '  Runtime dependency: none (nvm is used only during installation)\n'
+  ui "PM2 installed: $(highlight "$("$NODE" -e 'console.log(require(process.argv[1]).version)' "$INSTALL_DIR/node_modules/pm2/package.json")")"
+  ui 'nvm is used only during installation.'
+  if [ "$MODIFY_PATH" -eq 1 ]; then
+    section 'Configure PATH'
+    "$NODE" - "$INSTALL_DIR" "$USER_SHELL" <<'CONFIGURE_PATH'
+const fs = require('node:fs');
+const path = require('node:path');
+const [directory, shell] = process.argv.slice(2);
+const home = process.env.HOME;
+const quote = (value) => "'" + value.replace(/'/g, "'\\''") + "'";
+const exportCommand = `export PATH=${quote(directory)}"\${PATH:+:$PATH}"`;
+const start = '# >>> pm2-wrapper >>>';
+const end = '# <<< pm2-wrapper <<<';
+const block = `${start}
+case "\${PATH-}" in
+  ${quote(directory)}|${quote(directory)}:*) ;;
+  *) ${exportCommand} ;;
+esac
+${end}`;
+let files;
+if (!home) {
+  throw new Error('HOME is required to configure PATH (use --no-modify-path to skip)');
+} else if (shell === 'zsh') {
+  files = [path.join(process.env.ZDOTDIR || home, '.zshrc')];
+} else if (shell === 'bash') {
+  const login = ['.bash_profile', '.bash_login', '.profile']
+    .map((name) => path.join(home, name))
+    .find((file) => fs.existsSync(file)) || path.join(home, '.profile');
+  files = [path.join(home, '.bashrc'), login];
+} else {
+  console.error(`│  Shell ${shell || '(unknown)'}: automatic PATH setup supports bash and zsh.`);
+  files = [];
+}
+for (const file of files) {
+  const original = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  // Replace only our complete block; preserve the rest of the user's file.
+  const pattern = /^# >>> pm2-wrapper >>>\r?\n[\s\S]*?^# <<< pm2-wrapper <<<(?:\r?\n|$)/gm;
+  const content = original.replace(pattern, '');
+  if (content.includes(start) || content.includes(end)) {
+    throw new Error(`Incomplete pm2-wrapper block in ${file}; repair it before reinstalling`);
+  }
+  const updated = content + (content && !content.endsWith('\n') ? '\n' : '') + block + '\n';
+  if (updated !== original) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, updated);
+  }
+  console.error(`│  PATH configured: ${file}`);
+}
+console.error('│  Open a new terminal, or run in the current terminal:');
+console.error(`│  ${exportCommand}`);
+CONFIGURE_PATH
+  fi
+  outro '✓ Installed pm2-wrapper'
 fi

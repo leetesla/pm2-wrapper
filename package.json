@@ -5,7 +5,7 @@
   "license": "MIT",
   "private": true,
   "scripts": {
-    "test": "sh -n install.sh && ./install.sh --help"
+    "test": "sh -n install.sh && sh -n uninstall.sh && node --check startup.cjs && ./install.sh --help && ./uninstall.sh --help && node --test tests/*.test.cjs"
   },
   "engines": {
     "node": ">=18"
