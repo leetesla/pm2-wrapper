@@ -6,7 +6,9 @@ const os = require('node:os');
 const { spawnSync } = require('node:child_process');
 
 const quote = (value) => "'" + value.replace(/'/g, "'\\''") + "'";
-const run = (file, args) => spawnSync(file, args, { encoding: 'utf8', timeout: 10000, maxBuffer: 4 * 1024 * 1024 });
+const run = (file, args, timeout = 10000) => spawnSync(file, args, { encoding: 'utf8', timeout, maxBuffer: 4 * 1024 * 1024 });
+const useColor = () => Boolean(process.stdout.isTTY && process.env.TERM !== 'dumb' && !('NO_COLOR' in process.env));
+const highlight = (text, tone, color) => color ? `\x1b[1;${tone}m${text}\x1b[0m` : text;
 function checked(result) {
   if (result.error || result.status !== 0) {
     throw new Error(result.error?.message || result.stderr?.trim() || `命令退出码 ${result.status}`);
@@ -36,12 +38,31 @@ function option(args, names) {
   }
 }
 
-function startup(args, root, config) {
+function startSystemdService(service, query = run) {
+  if (!/^[\w.@:-]+$/.test(service)) throw new Error('服务名称无效');
+  const unit = `${service}.service`;
+  checked(query('systemctl', ['daemon-reload']));
+  // start is idempotent: an already active daemon is not restarted.
+  checked(query('systemctl', ['start', unit], 120000));
+  const output = checked(query('systemctl', ['show', unit, '--property=ActiveState', '--property=SubState', '--property=MainPID']));
+  const values = Object.fromEntries(output.trim().split('\n').map(line => {
+    const i = line.indexOf('='); return [line.slice(0, i), line.slice(i + 1)];
+  }));
+  if (values.ActiveState !== 'active' || values.SubState !== 'running' || !/^[1-9]\d*$/.test(values.MainPID || '')) {
+    throw new Error(`${unit} 未正常运行：${values.ActiveState}/${values.SubState}；MainPID=${values.MainPID}`);
+  }
+  return `${unit}：active/running；MainPID=${values.MainPID}`;
+}
+
+function startup(args, root, config, {
+  platform = process.platform, uid = process.getuid?.(), execute = spawnSync,
+  query = run, stdout = process.stdout, stderr = process.stderr,
+} = {}) {
   const cli = path.join(root, 'node_modules/pm2/bin/pm2');
   if (!fs.existsSync(cli)) throw new Error(`PM2 CLI 不存在：${cli}`);
   args = [...args];
   if (config.service && !option(args, ['--service-name'])) {
-    const suffix = process.platform === 'darwin' ? /\.plist$/ : /\.service$/;
+    const suffix = platform === 'darwin' ? /\.plist$/ : /\.service$/;
     args.push('--service-name', config.service.replace(suffix, ''));
   }
   const home = option(args, ['--hp']) || os.homedir();
@@ -51,7 +72,7 @@ function startup(args, root, config) {
   const pinnedPath = originalPath === nodeBin || originalPath.startsWith(`${nodeBin}:`) ? originalPath : `${nodeBin}${originalPath ? ':' + originalPath : ''}`;
   const env = { ...process.env, PATH: pinnedPath, _: process.execPath };
   // PM2 stores this PATH in its service definition. Do not remove other tools.
-  const result = spawnSync(process.execPath, [cli, ...args], { env, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const result = execute(process.execPath, [cli, ...args], { env, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
   if (result.error) throw result.error;
   const elevatedArgs = [...args];
   if (!option(args, ['-u', '--user'])) elevatedArgs.push('-u', user);
@@ -63,8 +84,18 @@ function startup(args, root, config) {
     `PM2_HOME=${quote(process.env.PM2_HOME || path.join(home, '.pm2'))}`,
     quote(process.execPath), quote(path.join(root, 'startup.cjs')), ...elevatedArgs.map(quote),
   ].join(' ');
-  process.stdout.write((result.stdout || '').replace(/^sudo env PATH=.*$/gm, () => command));
-  process.stderr.write(result.stderr || '');
+  stdout.write((result.stdout || '').replace(/^sudo env PATH=.*$/gm, () => command));
+  stderr.write(result.stderr || '');
+  const init = args[1]?.startsWith('-') ? undefined : args[1];
+  const systemd = init ? ['systemd', 'ubuntu', 'centos', 'arch', 'oracle'].includes(init) :
+    /^Platform\s+(systemd|ubuntu|centos|arch|oracle)\s*$/m.test((result.stdout || '').replace(/\x1b\[[0-9;]*m/g, ''));
+  if (result.status === 0 && args[0] === 'startup' && uid === 0 && platform === 'linux' &&
+      systemd) {
+    const service = option(args, ['--service-name']) || `pm2-${user}`;
+    stdout.write(`\n[pm2-wrapper] 启动并检查 systemd 服务 ${service}\n`);
+    const state = startSystemdService(service, query);
+    stdout.write(`${highlight(`✓ ${state}`, 32, useColor())}\n`);
+  }
   return result.status ?? 1;
 }
 
@@ -198,7 +229,7 @@ function linuxNode(config) {
   return resolveNode([executables[0][1]], environment);
 }
 
-function show(args, config, { platform = process.platform, home = os.homedir(), query = run, log = console.log } = {}) {
+function show(args, config, { platform = process.platform, home = os.homedir(), query = run, log = console.log, color = useColor() } = {}) {
   let service = config.service;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--service' && args[i + 1]) service = args[++i];
@@ -214,7 +245,14 @@ function show(args, config, { platform = process.platform, home = os.homedir(), 
   } else if (platform === 'linux') {
     definition = linuxConfig(service, query);
     const c = definition.config;
-    status = { enabled: c.UnitFileState || '无法确认', state: `${c.ActiveState}/${c.SubState}；MainPID=${c.MainPID}`, uncertain: !c.UnitFileState };
+    const running = c.ActiveState === 'active' && c.SubState === 'running' && /^[1-9]\d*$/.test(c.MainPID || '');
+    status = {
+      enabled: c.UnitFileState || '无法确认',
+      state: `${running ? '✓' : '!'} ${c.ActiveState || '未知'}/${c.SubState || '未知'}；MainPID=${c.MainPID || '未知'}`,
+      enabledTone: ['enabled', 'enabled-runtime'].includes(c.UnitFileState) ? 32 : 33,
+      stateTone: running ? 32 : c.ActiveState === 'failed' ? 31 : 33,
+      uncertain: !c.UnitFileState || !c.ActiveState || !c.SubState || !/^\d+$/.test(c.MainPID || ''),
+    };
     node = () => linuxNode(c);
   } else throw new Error('show startup 支持 macOS launchd 和 Linux systemd');
 
@@ -227,13 +265,12 @@ function show(args, config, { platform = process.platform, home = os.homedir(), 
     if (!/^v\d+\.\d+\.\d+$/.test(version)) throw new Error('Node 版本输出无法识别');
     const match = version === process.version;
     const samePath = fs.realpathSync(binary) === fs.realpathSync(process.execPath);
-    const color = process.stdout.isTTY && process.env.TERM !== 'dumb' && !('NO_COLOR' in process.env);
     const message = match ? '✓ 启动 Node 版本与 wrapper 一致' : '! 启动 Node 版本与 wrapper 不一致';
-    log(`│  启动配置 Node：${version}\n│  启动 Node 路径：${binary}\n│  ${color ? `\x1b[${match ? 32 : 31}m${message}\x1b[0m` : message}`);
+    log(`│  启动配置 Node：${version}\n│  启动 Node 路径：${binary}\n│  ${highlight(message, match ? 32 : 31, color)}`);
     if (!samePath) log('│  ! 启动 Node 路径与 wrapper 不同');
     if (!match || !samePath) code = 2;
   } catch (error) { log(`│  ! 启动 Node 未验证：${error.message}`); code = 2; }
-  log(`│\n◇  自启与服务状态\n│\n│  开机自启：${status.enabled}\n${status.state}\n\n└  只读检查完成；配置检查不代表已验证重启恢复。\n`);
+  log(`│\n◇  自启与服务状态\n│\n│  开机自启：${highlight(status.enabled, status.enabledTone || (status.enabled.startsWith('已启用') ? 32 : 33), color)}\n│  服务状态：${highlight(status.state, status.stateTone || 33, color)}\n\n└  只读检查完成；配置检查不代表已验证重启恢复。\n`);
   return code;
 }
 
@@ -249,4 +286,4 @@ if (require.main === module) {
   try { process.exitCode = main(process.argv.slice(2)); }
   catch (error) { console.error(`pm2-wrapper: ${error.message}`); process.exitCode = 2; }
 }
-module.exports = { words, resolveNode, macStatus, linuxConfig, linuxNode, show };
+module.exports = { startup, startSystemdService, words, resolveNode, macStatus, linuxConfig, linuxNode, show };

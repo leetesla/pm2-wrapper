@@ -9,7 +9,7 @@ function fixture(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pm2-startup-test-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const pm2 = path.join(root, 'pm2');
-  fs.writeFileSync(pm2, '#!/usr/bin/env node\nthrow new Error("must never execute PM2");\n');
+  fs.writeFileSync(pm2, '#!/usr/bin/env node\nthrow new Error("must never execute PM2");\n', { mode: 0o600 });
   return { root, pm2 };
 }
 
@@ -127,3 +127,154 @@ test('show startup reports missing interpreter as unverifiable', () => {
   assert.equal(show([], {}, { platform: 'linux', query, log: (line) => output.push(line) }), 2);
   assert.match(output.join('\n'), /启动 Node 未验证/);
 });
+
+function serviceQuery(overrides = {}) {
+  return (command, args) => {
+    if (command === process.execPath) return { status: 0, stdout: `${process.version}\n` };
+    assert.equal(command, 'systemctl');
+    if (args[0] === 'cat') return { status: 0, stdout: '# unit\n' };
+    return { status: 0, stdout: Object.entries({
+      LoadState: 'loaded', EnvironmentFiles: '', NeedDaemonReload: 'no', Environment: '',
+      ExecStart: `{ path=${process.execPath} ; }`, UnitFileState: 'enabled',
+      ActiveState: 'active', SubState: 'running', MainPID: '123', ...overrides,
+    }).map(([key, value]) => `${key}=${value}`).join('\n') };
+  };
+}
+
+for (const [properties, tone, text] of [
+  [{}, 32, '✓ active/running；MainPID=123'],
+  [{ ActiveState: 'inactive', SubState: 'dead', MainPID: '0' }, 33, '! inactive/dead；MainPID=0'],
+  [{ ActiveState: 'failed', SubState: 'failed', MainPID: '0' }, 31, '! failed/failed；MainPID=0'],
+  [{ MainPID: '0' }, 33, '! active/running；MainPID=0'],
+]) {
+  test(`show startup highlights service status: ${text}`, () => {
+    const output = [];
+    const code = show([], {}, { platform: 'linux', query: serviceQuery(properties), color: true, log: line => output.push(line) });
+    assert.equal(code, 0);
+    const rendered = output.join('\n');
+    assert.ok(rendered.includes(`\x1b[1;${tone}m${text}\x1b[0m`));
+    assert.ok(rendered.includes('\x1b[1;32menabled\x1b[0m'));
+  });
+}
+
+test('show startup keeps inactive and disabled status readable without color', () => {
+  const output = [];
+  assert.equal(show([], {}, {
+    platform: 'linux', color: false, log: line => output.push(line),
+    query: serviceQuery({ UnitFileState: 'disabled', ActiveState: 'inactive', SubState: 'dead', MainPID: '0' }),
+  }), 0);
+  assert.match(output.join('\n'), /开机自启：disabled/);
+  assert.match(output.join('\n'), /服务状态：! inactive\/dead；MainPID=0/);
+  assert.doesNotMatch(output.join('\n'), /\x1b\[/);
+  const colored = [];
+  show([], {}, { platform: 'linux', color: true, log: line => colored.push(line), query: serviceQuery({ UnitFileState: 'disabled' }) });
+  assert.ok(colored.join('\n').includes('\x1b[1;33mdisabled\x1b[0m'));
+});
+
+test('show startup reports missing systemd runtime properties as uncertain', () => {
+  assert.equal(show([], {}, { platform: 'linux', query: serviceQuery({ MainPID: '' }), log: () => {} }), 2);
+});
+
+const { startup, startSystemdService } = require('../startup.cjs');
+test('systemd startup reloads, starts and verifies the exact service without restarting it', () => {
+  const calls = [];
+  const result = startSystemdService('pm2-custom', (file, args, timeout) => {
+    calls.push([file, args, timeout]);
+    return { status: 0, stdout: args[0] === 'show' ? 'MainPID=321\nActiveState=active\nSubState=running\n' : '' };
+  });
+  assert.match(result, /pm2-custom.service：active\/running；MainPID=321/);
+  assert.deepEqual(calls.map(call => call[1]), [
+    ['daemon-reload'], ['start', 'pm2-custom.service'],
+    ['show', 'pm2-custom.service', '--property=ActiveState', '--property=SubState', '--property=MainPID'],
+  ]);
+  assert.equal(calls[1][2], 120000);
+});
+
+for (const failure of ['daemon-reload', 'start', 'show']) {
+  test(`systemd startup propagates ${failure} failures`, () => {
+    const calls = [];
+    assert.throws(() => startSystemdService('pm2-test', (_, args) => {
+      calls.push(args[0]);
+      return args[0] === failure ? { status: 1, stderr: `${failure} failed` } : { status: 0, stdout: '' };
+    }), new RegExp(`${failure} failed`));
+    assert.equal(calls.at(-1), failure);
+  });
+}
+
+for (const state of ['ActiveState=inactive\nSubState=dead\nMainPID=0', 'ActiveState=active\nSubState=running\nMainPID=0', '']) {
+  test(`systemd startup rejects unverified runtime: ${JSON.stringify(state)}`, () => {
+    assert.throws(() => startSystemdService('pm2-test', (_, args) => ({ status: 0, stdout: args[0] === 'show' ? state : '' })), /未正常运行/);
+  });
+}
+
+test('startup only starts systemd after successful elevated Linux startup', t => {
+  const { root } = fixture(t);
+  fs.mkdirSync(path.join(root, 'node_modules/pm2/bin'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'node_modules/pm2/bin/pm2'), '');
+  for (const scenario of [
+    { args: ['startup'], uid: 0, platform: 'linux', status: 0, starts: true },
+    { args: ['startup', 'systemd', '--service-name', 'explicit'], uid: 0, platform: 'linux', status: 0, starts: true },
+    { args: ['startup'], uid: 1000, platform: 'linux', status: 0 },
+    { args: ['startup'], uid: 0, platform: 'linux', status: 1 },
+    { args: ['unstartup'], uid: 0, platform: 'linux', status: 0 },
+    { args: ['startup', 'openrc'], uid: 0, platform: 'linux', status: 0 },
+    { args: ['startup'], uid: 0, platform: 'linux', status: 0, output: 'Platform openrc' },
+    { args: ['startup'], uid: 0, platform: 'darwin', status: 0 },
+  ]) {
+    const calls = [];
+    const output = [];
+    const result = startup(scenario.args, root, { service: 'configured.service' }, {
+      ...scenario, stdout: { write: line => output.push(line) }, stderr: { write() {} },
+      execute: () => ({ status: scenario.status, stdout: scenario.output || 'Platform systemd\n', stderr: '' }),
+      query: (_, args) => {
+        calls.push(args);
+        return { status: 0, stdout: args[0] === 'show' ? 'ActiveState=active\nSubState=running\nMainPID=42' : '' };
+      },
+    });
+    assert.equal(result, scenario.status);
+    assert.equal(calls.length, scenario.starts ? 3 : 0, JSON.stringify(scenario));
+    if (scenario.starts) {
+      assert.equal(calls[1][1], scenario.args.includes('explicit') ? 'explicit.service' : 'configured.service');
+      assert.match(output.join(''), /active\/running；MainPID=42/);
+    }
+  }
+  assert.throws(() => startup(['startup'], root, {}, {
+    uid: 0, platform: 'linux', stdout: { write() {} }, stderr: { write() {} },
+    execute: () => ({ status: 0, stdout: 'Platform systemd\n' }), query: () => ({ status: 1, stderr: 'start rejected' }),
+  }), /start rejected/);
+});
+
+test('launchd inspection still rejects group-writable configuration', t => {
+  const { pm2: file } = fixture(t);
+  fs.chmodSync(file, 0o664);
+  const result = macStatus({ Label: 'com.PM2', RunAtLoad: true }, file, (_, args) => args[0] === 'print-disabled' ?
+    { status: 0, stdout: 'disabled services = {\n}\n' } :
+    { status: 113, stderr: 'Could not find service "com.PM2" in domain' });
+  assert.equal(result.uncertain, true);
+  assert.match(result.enabled, /权限或登录会话限制/);
+});
+
+for (const scenario of [
+  { tty: true, environment: {}, colored: true },
+  { tty: false, environment: {}, colored: false },
+  { tty: true, environment: { TERM: 'dumb' }, colored: false },
+  { tty: true, environment: { NO_COLOR: '' }, colored: false },
+]) {
+  test(`startup status color respects terminal settings ${JSON.stringify(scenario)}`, () => {
+    const env = { ...process.env, TERM: 'xterm-256color' };
+    delete env.NO_COLOR;
+    delete env.FORCE_COLOR;
+    Object.assign(env, scenario.environment);
+    const source = `
+      const assert = require('node:assert/strict');
+      const { show } = require(${JSON.stringify(path.resolve(__dirname, '../startup.cjs'))});
+      Object.defineProperty(process.stdout, 'isTTY', { value: ${scenario.tty} });
+      const serviceQuery = ${serviceQuery.toString()};
+      process.exitCode = show([], {}, { platform: 'linux', query: serviceQuery() });
+    `;
+    const result = require('node:child_process').spawnSync(process.execPath, ['-e', source], { env, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.includes('\x1b[1;32m✓ active/running；MainPID=123\x1b[0m'), scenario.colored);
+    if (!scenario.colored) assert.doesNotMatch(result.stdout, /\x1b\[/);
+  });
+}

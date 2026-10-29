@@ -160,7 +160,7 @@ export PATH="$HOME/.local/share/pm2-wrapper:$PATH"
 
 ```sh
 pm2 startup
-# 复制并执行上一步打印的 sudo 命令。
+# 复制并执行上一步打印的 sudo 命令；Linux systemd 下会启用并立即启动服务。
 pm2 show startup
 pm2 show startup --service my-pm2
 ```
@@ -189,7 +189,7 @@ macOS 检查会处理 PM2 模板中的 `LaunchOnlyOnce=true`：一次性任务�
 
 检查过程不会运行 PM2 CLI、启动其 daemon、加载服务或写入文件。比较基准是当前包装脚本，不会读取 unode 的安装历史。系统服务注册文件仍位于 `~/Library/LaunchAgents/` 或 systemd 单元目录中，`startup.json` 不会移动这些文件。
 
-自启配置生成由 PM2 执行，可能会加载服务；仅修改包装脚本不会迁移已运行的 daemon。`show` 将应用名 `startup` 保留给自启检查；如需查看同名应用，请直接调用本地 PM2 CLI。
+自启配置生成由 PM2 执行。在 Linux systemd 下，提权命令成功生成配置后，包装脚本会执行 `daemon-reload`、`start` 并检查服务为 `active/running` 且 MainPID 非零；启动失败或无法确认运行状态时返回非零退出码。已运行的服务不会被重启。应用列表仍需执行 `pm2 save` 保存，才能在服务启动时恢复。`show startup` 会高亮自启与运行状态：正常为绿色、未运行或禁用为黄色、失败为红色；无颜色时仍保留文字与状态标记。重定向输出、`TERM=dumb` 或设置 `NO_COLOR` 时不使用颜色。仅修改包装脚本不会迁移已运行的 daemon。`show` 将应用名 `startup` 保留给自启检查；如需查看同名应用，请直接调用本地 PM2 CLI。
 
 ## 卸载
 

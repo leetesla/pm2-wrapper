@@ -15,7 +15,9 @@ else
   [ -s "$NVM_DIR/nvm.sh" ] || fail "nvm.sh not found at $NVM_DIR/nvm.sh (set NVM_DIR to the nvm directory)"
   # Load nvm without selecting the version from the existing .nvmrc.
   # shellcheck disable=SC1090
-  . "$NVM_DIR/nvm.sh" --no-use
+  # dash ignores arguments after the dot command; set them explicitly.
+  set -- --no-use
+  . "$NVM_DIR/nvm.sh"
 
   RESOLVED_VERSION=$(nvm version "$REQUESTED_VERSION") || RESOLVED_VERSION=N/A
   if [ "$RESOLVED_VERSION" = N/A ] || [ -z "$RESOLVED_VERSION" ]; then
