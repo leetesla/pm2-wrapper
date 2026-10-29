@@ -1,12 +1,18 @@
 INSTALL_DIR ?= $(HOME)/.local/share/pm2-wrapper
-NODE_VERSION ?=
+NODE_VERSION ?= $(shell cat .nvmrc 2>/dev/null)
 PM2_VERSION ?=
 NVM_DIR ?=
 
-.PHONY: install preview
+.PHONY: nvmrc install preview
+
+# Record the Node.js version currently selected in this shell.
+nvmrc:
+	@node -v > .nvmrc
+	@printf 'Wrote .nvmrc: '
+	@cat .nvmrc
 
 # Install PM2 into a dedicated directory.
-# Example: make install NODE_VERSION=22.21.1
+# Defaults to the version recorded by make nvmrc.
 install:
 	@set -eu; \
 	set -- --dir "$(INSTALL_DIR)"; \
@@ -16,6 +22,5 @@ install:
 	exec ./install.sh "$$@"
 
 # Generate ./pm2 for inspection. This does not install PM2 or modify .nvmrc.
-# Example: make preview NODE_VERSION=22.21.1
 preview:
 	@PM2_WRAPPER_NODE_VERSION="$(NODE_VERSION)" NVM_DIR="$(NVM_DIR)" ./install.sh --preview

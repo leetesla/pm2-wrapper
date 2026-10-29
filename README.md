@@ -5,7 +5,7 @@ A small installer that creates a **single PM2 wrapper command** using a fixed No
 ## What it does
 
 - Installs PM2 locally in a chosen directory.
-- Reads that directory's `.nvmrc` (or accepts `--node-version`) and resolves the selected Node executable during installation.
+- Reads a selected Node version and resolves its executable during installation.
 - Generates a `pm2` command that invokes the local PM2 CLI with that absolute Node path.
 - Does not change the calling shell's Node version.
 - Uses the normal PM2 state directory (`~/.pm2`) unless `PM2_HOME` is explicitly set.
@@ -20,51 +20,63 @@ It does **not** manage the Node version of each application. Configure an applic
 
 nvm is required only while installing or regenerating the wrapper. Running the generated `pm2` command does not source `nvm.sh`.
 
+## Select and record a Node version
+
+Use nvm to select the version you want this wrapper to pin, then record the active `node` version:
+
+```sh
+nvm use 22.21.1
+make nvmrc
+```
+
+The `nvmrc` target runs `node -v > .nvmrc`. The resulting `.nvmrc` is local machine configuration and is intentionally ignored by Git, so it will not be committed.
+
+You can also run `node -v > .nvmrc` directly if you prefer.
+
 ## Preview the generated wrapper
 
-To generate a preview script named `./pm2` in the current repository directory:
+Generate a preview script named `./pm2` in the current repository directory:
+
+```sh
+make preview
+```
+
+By default, preview uses the version in the local `.nvmrc`. You can override it explicitly:
 
 ```sh
 make preview NODE_VERSION=22.21.1
 ```
 
-Replace the version with one already installed in nvm. If the current directory has a suitable `.nvmrc`, you can run `make preview` without specifying `NODE_VERSION`. To use a non-default nvm installation:
-
-```sh
-make preview NODE_VERSION=22.21.1 NVM_DIR="$HOME/.nvm"
-```
-
-Preview mode only resolves the Node executable and writes the wrapper script. It does not install PM2, modify `.nvmrc`, or change package files. The generated root-level `pm2` file is listed in `.gitignore`, so it will not be committed accidentally. It is for inspecting the generated script; it will not run successfully from the repository unless PM2 is installed under that directory's `node_modules`.
+Preview mode only resolves the Node executable and writes the wrapper script. It does not install PM2 or modify `.nvmrc` or package files. The generated root-level `pm2` file is also ignored by Git. It will not run successfully from the repository unless PM2 is installed under that directory's `node_modules`.
 
 ## Install
 
-The `make install` target installs into `$HOME/.local/share/pm2-wrapper` by default:
+After creating `.nvmrc`, install into the default directory `$HOME/.local/share/pm2-wrapper`:
 
 ```sh
-nvm install 22.21.1
+make install
+```
+
+Or specify the Node version directly without first creating `.nvmrc`:
+
+```sh
 make install NODE_VERSION=22.21.1
 ```
 
-Choose another destination with `INSTALL_DIR`:
-
-```sh
-make install INSTALL_DIR="$HOME/services/pm2-runtime" NODE_VERSION=22.21.1
-```
-
-If the destination already has a `.nvmrc`, omit `NODE_VERSION` to use that setting:
+Choose another destination:
 
 ```sh
 make install INSTALL_DIR="$HOME/services/pm2-runtime"
 ```
 
-To choose a PM2 version or a non-default nvm directory:
+Choose a PM2 version or a non-default nvm directory:
 
 ```sh
-make install NODE_VERSION=22.21.1 PM2_VERSION=6.0.0
+make install PM2_VERSION=6.0.0
 make install NODE_VERSION=22.21.1 NVM_DIR="$HOME/.nvm"
 ```
 
-The version above is an example. Use a PM2 version appropriate for your environment. The selected Node version must already be installed with nvm; the installer does not download Node automatically.
+The PM2 version above is an example. Use a version appropriate for your environment. The selected Node version must already be installed with nvm; the installer does not download Node automatically.
 
 You can also invoke the installer directly:
 
@@ -72,11 +84,11 @@ You can also invoke the installer directly:
 ./install.sh --dir "$HOME/.local/share/pm2-wrapper" --node-version 22.21.1
 ```
 
-If PM2 is already installed in the destination and `PM2_VERSION` / `--pm2-version` is omitted, the installer preserves the installed PM2 version. On a first install, it installs the current PM2 release.
+If PM2 is already installed in the destination and no PM2 version is specified, the installer preserves the installed PM2 version. On a first install, it installs the current PM2 release.
 
 ## Result
 
-The installation directory contains only the wrapper-specific files plus the local npm package files:
+The installation directory contains the wrapper-specific files plus local npm package files:
 
 ```text
 pm2-wrapper/
@@ -108,25 +120,28 @@ Optionally add the installation directory to `PATH`:
 export PATH="$HOME/.local/share/pm2-wrapper:$PATH"
 ```
 
-Then the wrapper can be invoked as `pm2`. Ensure this directory precedes any global PM2 executable in `PATH`.
+Ensure this directory precedes any global PM2 executable in `PATH`.
 
 ## Change Node versions
 
-The generated wrapper embeds the absolute Node executable path. Editing `.nvmrc` alone does not change that path. To switch the PM2 runtime, install the desired Node version and rerun the installer:
+Select a new Node version, regenerate the local `.nvmrc`, and rerun installation:
 
 ```sh
 nvm install 22.22.0
-make install INSTALL_DIR="$HOME/.local/share/pm2-wrapper" NODE_VERSION=22.22.0
+nvm use 22.22.0
+make nvmrc
+make install
 ```
 
-A running PM2 daemon does not change its runtime merely because the wrapper is regenerated. Plan a controlled daemon restart/migration to make the new runtime active. Check your saved process list and service startup configuration before stopping the existing daemon.
+The generated wrapper embeds the absolute Node executable path. Editing `.nvmrc` alone does not change that path; rerun `make install` to regenerate it. A running PM2 daemon does not change its runtime merely because the wrapper is regenerated. Plan a controlled daemon restart/migration before relying on the new runtime.
 
 ## Tests
 
 ```sh
 sh -n install.sh
 ./install.sh --help
-make -n preview NODE_VERSION=22.21.1
-make -n install NODE_VERSION=22.21.1
+make -n nvmrc
+make -n preview
+make -n install
 npm test
 ```
