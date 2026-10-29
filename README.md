@@ -113,7 +113,7 @@ This option is intended for explicit runtime paths. Support for additional versi
 
 For a controlled daemon migration, save the process list first, then stop and resurrect it using the same wrapper and PM2_HOME:
 
-    pm2 save
+    /path/to/pm2-wrapper/bin/pm2 save
     /path/to/pm2-wrapper/bin/pm2 kill
     /path/to/pm2-wrapper/bin/pm2 resurrect
 
