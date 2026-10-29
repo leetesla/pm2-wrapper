@@ -1,109 +1,111 @@
 # pm2-wrapper
 
-A small installer that creates a **single PM2 wrapper command** using a fixed Node.js executable. nvm is used only during installation or preview generation to resolve the Node path; the generated command does not call nvm.
+一个小型安装工具，用固定的 Node.js 可执行文件生成**统一的 PM2 包装命令**。nvm 仅在安装或生成预览时用于解析 Node 路径，生成的命令运行时不会调用 nvm。
 
-## What it does
+## 功能
 
-- Installs PM2 locally in a chosen directory.
-- Reads a selected Node version and resolves its executable during installation.
-- Generates a `pm2` command that invokes the local PM2 CLI with that absolute Node path.
-- Pins Node in startup commands and checks existing startup configuration with `pm2 show startup`.
-- Does not change the calling shell's Node version.
-- Uses the normal PM2 state directory (`~/.pm2`) unless `PM2_HOME` is explicitly set.
+- 将 PM2 安装到指定目录。
+- 在安装时读取选定的 Node 版本，并解析其可执行文件路径。
+- 生成 `pm2` 命令，使用 Node 的绝对路径调用本地 PM2 CLI。
+- 在自启命令中固定 Node，并通过 `pm2 show startup` 检查现有自启配置。
+- 不改变调用它的 shell 所使用的 Node 版本。
+- 默认使用 PM2 的常规状态目录（`~/.pm2`），除非显式设置了 `PM2_HOME`。
 
-It does **not** manage the Node version of each application. Configure an application's `interpreter` separately if that application must use a different Node version.
+本工具**不管理各个应用的 Node 版本**。如果某个应用需要使用不同的 Node 版本，请单独配置该应用的 `interpreter`。
 
-## Requirements
+## 环境要求
 
-- macOS or Linux.
-- nvm installed, and the selected Node version already installed.
-- The selected Node installation's npm available through nvm.
+- macOS 或 Linux。
+- 已安装 nvm，以及准备使用的 Node 版本。
+- 可以通过 nvm 使用所选 Node 版本附带的 npm。
 
-nvm is required only while installing or regenerating the wrapper. Running the generated `pm2` command does not source `nvm.sh`.
+只有安装或重新生成包装脚本时才需要 nvm。运行生成的 `pm2` 命令不会加载 `nvm.sh`。
 
-## Select and record a Node version
+## 选择并记录 Node 版本
 
-Use nvm to select the version you want this wrapper to pin, then record the active `node` version:
+使用 nvm 选择包装脚本要固定的版本，然后记录当前 `node` 的版本：
 
 ```sh
 nvm use 22.21.1
 make nvmrc
 ```
 
-The `nvmrc` target runs `node -v > .nvmrc`. The resulting `.nvmrc` is local machine configuration and is intentionally ignored by Git, so it will not be committed.
+不带版本时，`make nvmrc` 记录当前 `node -v`。也可以直接指定版本，由 nvm 解析并写入完整版本号：
 
-You can also run `node -v > .nvmrc` directly if you prefer.
+```sh
+make nvmrc 22
+make nvmrc 22.21.1
+make nvmrc 22 NVM_DIR="$HOME/.nvm"
+```
 
-## Preview the generated wrapper
+如果指定版本尚未安装，会询问 `Install with nvm? [Y/n]`。直接回车默认安装，也接受 `y`、`yes`、`n`、`no`，不区分大小写；其他输入会重新询问。取消、输入结束或安装失败时，原 `.nvmrc` 保持不变。已有匹配版本时，使用 nvm 解析到的本地版本。
 
-Generate a preview script named `./pm2` in the current repository directory:
+生成的 `.nvmrc` 属于本机配置，已被 Git 忽略，不会提交到仓库。
+
+也可以直接执行 `node -v > .nvmrc`。
+
+## 预览生成的包装脚本
+
+在当前仓库目录中生成名为 `./pm2` 的预览脚本：
 
 ```sh
 make preview
 ```
 
-By default, preview uses the version in the local `.nvmrc`. You can override it explicitly:
+默认使用本地 `.nvmrc` 中的版本，也可以显式指定：
 
 ```sh
 make preview NODE_VERSION=22.21.1
 ```
 
-Preview mode resolves the Node executable and writes the wrapper script, copying `startup.cjs` beside it when previewing outside the repository. It does not install PM2 or modify `.nvmrc`, `startup.json`, or package files. The generated root-level `pm2` file is also ignored by Git. Normal PM2 commands require PM2 under that directory's `node_modules`; `show startup` can run without it.
+预览模式会解析 Node 可执行文件并写入包装脚本；在仓库外生成预览时，还会将 `startup.cjs` 复制到脚本所在目录。它不会安装 PM2，也不会修改 `.nvmrc`、`startup.json` 或 npm 包配置文件。仓库根目录中生成的 `pm2` 文件也已被 Git 忽略。普通 PM2 命令需要该目录的 `node_modules` 中已安装 PM2；`show startup` 无需安装 PM2 即可运行。
 
-Preview reports whether a `pm2` command exists in `PATH` and shows its path
-when found, without asking for confirmation. Preview and installation use
-separate step headings and highlighted status messages in the terminal.
-Colors are disabled for redirected output, `TERM=dumb`, or when `NO_COLOR` is set.
+预览会检查 `PATH` 中是否已有 `pm2` 命令，找到时显示其路径，不要求确认。预览和安装会在终端中显示各步骤标题，并高亮状态信息。输出被重定向、`TERM=dumb` 或设置了 `NO_COLOR` 时，不使用颜色。
 
-## Install
+## 安装
 
-After creating `.nvmrc`, install into the default directory `$HOME/.local/share/pm2-wrapper`:
+创建 `.nvmrc` 后，安装到默认目录 `$HOME/.local/share/pm2-wrapper`：
 
 ```sh
 make install
 ```
 
-If a `pm2` command already exists in `PATH` and does not point to this
-installation's wrapper, the installer shows its path and asks
-`Continue installation? [y/N]` before creating or changing installation files.
-Only `y` or `Y` continues; `n`, `N`, Enter, any other input, or end-of-input
-cancels with a nonzero exit status. Preview reports the result without asking.
-The existing executable is not overwritten, but the wrapper takes precedence
-after the generated PATH configuration is loaded. Both commands use `~/.pm2`
-unless `PM2_HOME` is explicitly set.
+如果 `PATH` 中已有 `pm2` 命令，且它不指向本次安装的包装脚本，安装器会显示其路径，并在创建或修改安装文件前询问 `Continue installation? [y/N]`（是否继续安装）。只有输入 `y` 或 `Y` 才会继续；输入 `n`、`N`、直接回车、其他内容或遇到输入结束，都会取消安装并以非零状态码退出。预览模式只显示检查结果，不要求确认。
 
-Or specify the Node version directly without first creating `.nvmrc`:
+已有的可执行文件不会被覆盖，但加载生成的 PATH 配置后，会优先使用本工具的包装命令。两个命令默认都使用 `~/.pm2`，除非显式设置了 `PM2_HOME`。
+
+也可以直接指定 Node 版本，无需预先创建 `.nvmrc`：
 
 ```sh
 make install NODE_VERSION=22.21.1
 ```
 
-Choose another destination:
+指定其他安装目录：
 
 ```sh
 make install INSTALL_DIR="$HOME/services/pm2-runtime"
 ```
 
-Choose a PM2 version or a non-default nvm directory:
+指定 PM2 版本或非默认的 nvm 目录：
 
 ```sh
 make install PM2_VERSION=6.0.0
 make install NODE_VERSION=22.21.1 NVM_DIR="$HOME/.nvm"
 ```
 
-The PM2 version above is an example. Use a version appropriate for your environment. The selected Node version must already be installed with nvm; the installer does not download Node automatically.
+上述 PM2 版本仅为示例，请根据自己的环境选择合适版本。所选 Node 版本必须已通过 nvm 安装；安装器不会自动下载 Node。
 
-You can also invoke the installer directly:
+也可以直接调用安装脚本：
 
 ```sh
 ./install.sh --dir "$HOME/.local/share/pm2-wrapper" --node-version 22.21.1
 ```
 
-If PM2 is already installed in the destination and no PM2 version is specified, the installer preserves the installed PM2 version. On a first install, it installs the current PM2 release.
+如果目标目录中已安装 PM2，且本次未指定 PM2 版本，安装器会保留现有版本。首次安装且未指定版本时，会安装当前发布的 PM2 版本。
 
-## Result
+## 安装结果
 
-The installation directory contains the wrapper-specific files plus local npm package files:
+安装目录包含包装脚本相关文件和本地 npm 包文件：
 
 ```text
 pm2-wrapper/
@@ -117,15 +119,15 @@ pm2-wrapper/
 └── pm2
 ```
 
-- `.nvmrc` records the exact Node version resolved at install time.
-- `node_modules/pm2` is the local PM2 installation.
-- `pm2` is the generated wrapper command.
-- `startup.cjs` implements startup handling and read-only inspection.
-- `startup.json` holds user-editable startup settings; reinstalling preserves it.
+- `.nvmrc`：记录安装时解析得到的确切 Node 版本。
+- `node_modules/pm2`：本地安装的 PM2。
+- `pm2`：生成的包装命令。
+- `startup.cjs`：实现自启命令处理和只读检查。
+- `startup.json`：保存可由用户编辑的自启设置，重新安装时会保留。
 
-No `bin/`, `lib/`, ecosystem helper, alias command, or per-installation `.pm2/` directory is created.
+安装器不会创建 `bin/`、`lib/`、ecosystem 辅助脚本、别名命令或每个安装目录独立的 `.pm2/` 状态目录。
 
-## Use
+## 使用
 
 ```sh
 "$HOME/.local/share/pm2-wrapper/pm2" --version
@@ -133,55 +135,41 @@ No `bin/`, `lib/`, ecosystem helper, alias command, or per-installation `.pm2/` 
 "$HOME/.local/share/pm2-wrapper/pm2" start ecosystem.config.js
 ```
 
-Installation automatically configures `PATH` for the shell identified by `$SHELL`
-on macOS and Linux:
+在 macOS 和 Linux 上，安装器会根据 `$SHELL` 识别用户的 shell，并自动配置 `PATH`：
 
-- zsh: `${ZDOTDIR:-$HOME}/.zshrc`.
-- bash: `~/.bashrc` and the first existing login file in the order
-  `~/.bash_profile`, `~/.bash_login`, `~/.profile`. If none exists, it creates
-  `~/.profile`, so it does not mask an existing login file.
+- zsh：写入 `${ZDOTDIR:-$HOME}/.zshrc`。
+- bash：写入 `~/.bashrc`，并按 `~/.bash_profile`、`~/.bash_login`、`~/.profile` 的顺序选择第一个已存在的登录配置文件。如果都不存在，则创建 `~/.profile`，避免遮蔽已有的登录配置文件。
 
-The installer preserves other settings and maintains one marked `pm2-wrapper`
-block in each file. Reinstalling updates that block for the selected installation
-directory. The wrapper directory is prepended to `PATH` when the configuration
-loads; loading it again does not duplicate an entry already at the front.
-Preview mode never edits shell startup files.
+安装器会保留其他设置，并在每个文件中维护一个带有 `pm2-wrapper` 标记的配置块。重新安装时，会根据所选安装目录更新该配置块。加载配置时，包装脚本所在目录会被放到 `PATH` 最前面；如果它已位于最前面，再次加载不会重复添加。预览模式不会修改 shell 启动配置文件。
 
-Open a new terminal after installation. An installer cannot change its parent
-shell's environment, so to use `pm2` in the current terminal, run the command
-printed by the installer. For the default directory:
+安装后请打开新终端。安装器无法修改父 shell 的环境；如果要在当前终端立即使用 `pm2`，请执行安装器打印的命令。默认安装目录对应的命令为：
 
 ```sh
 export PATH="$HOME/.local/share/pm2-wrapper:$PATH"
 ```
 
-To manage PATH yourself, skip automatic configuration:
+如果希望自行管理 PATH，可以跳过自动配置：
 
 ```sh
 ./install.sh --dir "$HOME/.local/share/pm2-wrapper" --node-version 22.21.1 --no-modify-path
 ```
 
-Other shells receive manual PATH instructions instead of startup file changes.
+对于其他 shell，安装器只提供手动配置 PATH 的说明，不修改其启动配置文件。
 
-## Startup configuration
+## 自启配置
 
 ```sh
 pm2 startup
-# Copy and execute the sudo command printed above.
+# 复制并执行上一步打印的 sudo 命令。
 pm2 show startup
 pm2 show startup --service my-pm2
 ```
 
-`startup` and `unstartup` put the wrapper's fixed Node `bin` directory first in
-their child process's PATH. Other PATH entries remain available. The printed
-sudo command also puts it first and explicitly runs the installed startup helper
-with the fixed Node, preserving HOME and PM2_HOME. This prevents a different
-Node in the calling terminal from being selected when the command is copied.
-Other PM2 commands continue to be passed directly to the local CLI. Put
-`startup`, `unstartup`, or `show startup` before their options.
+`startup` 和 `unstartup` 会将包装脚本固定的 Node 所在 `bin` 目录放到子进程 PATH 的最前面，同时保留其他 PATH 条目。打印的 sudo 命令也会优先使用该目录，并显式使用固定的 Node 运行已安装的自启辅助脚本，同时保留 HOME 和 PM2_HOME。这样，将命令复制到其他终端执行时，就不会误用该终端中的另一个 Node。
 
-Startup settings live in the installation directory, by default
-`~/.local/share/pm2-wrapper/startup.json`:
+其他 PM2 命令仍直接透传给本地 CLI。使用时，请将 `startup`、`unstartup` 或 `show startup` 放在选项之前。
+
+自启设置保存在安装目录中，默认路径为 `~/.local/share/pm2-wrapper/startup.json`：
 
 ```json
 {
@@ -189,61 +177,43 @@ Startup settings live in the installation directory, by default
 }
 ```
 
-`null` uses PM2's default service name (`pm2.USER.plist` on macOS and
-`pm2-USER.service` on Linux). Set `service` to a custom name such as `my-pm2`
-to use it for both startup generation and inspection. An explicit
-`startup --service-name NAME` or `show startup --service NAME` overrides this
-setting for that invocation. `show` accepts the `.plist` or `.service` suffix;
-the configuration accepts either form too. These overrides are not saved.
+`null` 表示使用 PM2 的默认服务名：macOS 为 `pm2.USER.plist`，Linux 为 `pm2-USER.service`。将 `service` 设置为 `my-pm2` 等自定义名称后，生成自启配置和检查自启配置时都会使用该名称。
 
-Following [unode's startup inspection](https://github.com/leetesla/unode#开机启动),
-`show startup` prints the existing definition, resolves its Node through its
-command/shebang and saved PATH, and compares its version and path against the
-wrapper's fixed Node. It displays autostart enablement separately from current
-service registration/state. macOS inspection handles the PM2 template's
-`LaunchOnlyOnce=true`: an unregistered one-shot job does not prove PM2 stopped.
-Linux inspection reads the effective systemd properties and displays unit
-contents, including drop-ins. Complex launch commands, unknown interpreters,
-EnvironmentFile, pending daemon-reload, or failed status queries are reported
-as requiring review. Exit code is 2 for a Node mismatch or an unverifiable
-configuration/state, and 0 when inspection succeeds; a disabled or inactive
-service is displayed as such, independently of the Node comparison.
+显式传入 `startup --service-name NAME` 或 `show startup --service NAME`，可以仅在本次调用中覆盖该设置。`show` 接受带有 `.plist` 或 `.service` 后缀的名称，配置文件中的服务名也可以带或不带后缀。这些临时覆盖不会保存到配置文件。
 
-Inspection does not run the PM2 CLI, start its daemon, load services, or write
-files. It compares against this wrapper, without reading unode's installation
-history. System registration files still live in `~/Library/LaunchAgents/` or
-the systemd unit directory; `startup.json` does not move those files. Startup
-generation delegates to PM2 and can load a service; changing the wrapper alone
-does not migrate a running daemon. `show` reserves the app name `startup`;
-use the local PM2 CLI directly if you need to inspect an app with that name.
+参考 [unode 的自启检查](https://github.com/leetesla/unode#开机启动)，`show startup` 会打印现有自启配置，根据启动命令、shebang 和保存的 PATH 解析其 Node，并将版本和路径与包装脚本固定的 Node 比较。自启是否启用与服务当前是否注册、运行会分别显示。
 
-## Uninstall
+macOS 检查会处理 PM2 模板中的 `LaunchOnlyOnce=true`：一次性任务当前未注册，并不能证明 PM2 已停止。Linux 检查会读取实际生效的 systemd 属性，并显示单元配置内容，包括 drop-in 覆盖配置。
 
-From this repository, run:
+遇到复杂启动命令、未知解释器、EnvironmentFile、待执行 daemon-reload 或状态查询失败时，会提示需要人工复核。Node 不匹配，或无法验证配置、状态时，退出码为 2；检查成功时为 0。服务被禁用或未运行时，会单独显示对应状态，不影响 Node 比较本身的结果。
+
+检查过程不会运行 PM2 CLI、启动其 daemon、加载服务或写入文件。比较基准是当前包装脚本，不会读取 unode 的安装历史。系统服务注册文件仍位于 `~/Library/LaunchAgents/` 或 systemd 单元目录中，`startup.json` 不会移动这些文件。
+
+自启配置生成由 PM2 执行，可能会加载服务；仅修改包装脚本不会迁移已运行的 daemon。`show` 将应用名 `startup` 保留给自启检查；如需查看同名应用，请直接调用本地 PM2 CLI。
+
+## 卸载
+
+在本仓库中执行：
 
 ```sh
 make uninstall
 ```
 
-For a custom installation directory:
+如果使用了自定义安装目录：
 
 ```sh
 make uninstall INSTALL_DIR="$HOME/services/pm2-runtime"
 ```
 
-Or run `./uninstall.sh --dir DIR` directly. Node.js must be available in PATH;
-uninstall does not load nvm.
+也可以直接执行 `./uninstall.sh --dir DIR`。卸载时要求 PATH 中有可用的 Node.js，不会加载 nvm。
 
-Uninstall removes the managed runtime files (including `startup.cjs` and
-`startup.json`) and matching `pm2-wrapper` PATH
-blocks from bash and zsh startup files, including the current `ZDOTDIR` when set.
-It preserves other shell settings, unrelated files, Node.js, PM2 state
-(`~/.pm2` or `PM2_HOME`), and running processes. A PATH block for another
-installation directory is retained. Open a new terminal afterward to refresh PATH.
+卸载会移除本工具管理的运行时文件（包括 `startup.cjs` 和 `startup.json`），并从 bash、zsh 启动配置文件中移除与该安装目录匹配的 `pm2-wrapper` PATH 配置块。如果设置了 `ZDOTDIR`，也会检查该目录下的配置文件。
 
-## Change Node versions
+其他 shell 设置、无关文件、Node.js、PM2 状态（`~/.pm2` 或 `PM2_HOME`）以及正在运行的进程都会保留。指向其他安装目录的 PATH 配置块也会保留。卸载后请打开新终端，以刷新 PATH。
 
-Select a new Node version, regenerate the local `.nvmrc`, and rerun installation:
+## 更换 Node 版本
+
+选择新的 Node 版本，重新生成本地 `.nvmrc`，然后重新安装：
 
 ```sh
 nvm install 22.22.0
@@ -252,9 +222,9 @@ make nvmrc
 make install
 ```
 
-The generated wrapper embeds the absolute Node executable path. Editing `.nvmrc` alone does not change that path; rerun `make install` to regenerate it. A running PM2 daemon does not change its runtime merely because the wrapper is regenerated. Plan a controlled daemon restart/migration before relying on the new runtime.
+生成的包装脚本中写入了 Node 可执行文件的绝对路径。仅编辑 `.nvmrc` 不会改变该路径，必须重新执行 `make install` 才会重新生成。已运行的 PM2 daemon 不会因为包装脚本重新生成而自动更换运行时。在依赖新运行时之前，请安排可控的 daemon 重启或迁移。
 
-## Tests
+## 测试
 
 ```sh
 sh -n install.sh
@@ -264,3 +234,26 @@ make -n preview
 make -n install
 npm test
 ```
+
+使用**现有的 PM2 命令**测试应用实际使用的 Node：
+
+```sh
+npm run test:interpreter
+```
+
+此集成测试使用当前 PATH 中的 `pm2`，不会安装 PM2 或更改其配置的 Node。测试会将运行测试脚本的 Node 所在目录放到子命令 PATH 的最前面；该 Node 的版本必须与 PM2 使用的版本不同。也可以显式指定两个可执行文件，并保存实测结果：
+
+```sh
+npm run test:interpreter -- \
+  --pm2 "$HOME/.local/share/pm2-wrapper/pm2" \
+  --path-node "$HOME/.nvm/versions/node/v22.23.4/bin/node" \
+  --output /tmp/pm2-interpreter-results.json
+```
+
+请使用本机已安装的 Node 版本。测试会运行六个应用，分别在 fork 和 cluster 模式下使用以下三种配置：不指定 `interpreter`、设置 `interpreter: process.execPath`、设置另一个 Node 的绝对路径。
+
+每个应用都会报告实际的 `process.version` 和 `process.execPath`。脚本会同时检查这两项以及实际运行模式；配置文件还会记录现有 PM2 CLI 所使用的 Node。
+
+对于 fork 模式下的 `.js` 应用，不指定 `interpreter` 时会使用应用 PATH 中的 `node`；在 ecosystem 配置中指定 `process.execPath` 时，会使用 PM2 CLI 的 Node。cluster 模式的工作进程使用 daemon 的 Node，即使配置中指定了其他 Node 路径也是如此。
+
+测试使用临时 `PM2_HOME`，退出时会清理测试应用及其 daemon，不会连接常规 PM2 daemon 或修改其进程列表。
