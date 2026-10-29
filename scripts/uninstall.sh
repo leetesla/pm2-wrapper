@@ -4,7 +4,7 @@ set -eu
 usage() {
   cat <<'USAGE'
 Usage:
-  ./uninstall.sh [--dir DIR]
+  ./scripts/uninstall.sh [--dir DIR]
 
 Options:
   --dir DIR     Installation directory (default: $HOME/.local/share/pm2-wrapper)

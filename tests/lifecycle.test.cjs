@@ -5,7 +5,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { PassThrough } = require('node:stream');
 const { spawnSync } = require('node:child_process');
-const { parse, confirm, elevation, savedApplications, verifyApps, plan, approval, macPlist, mutate } = require('../lifecycle.cjs');
+const { parse, confirm, elevation, savedApplications, verifyApps, plan, approval, macPlist, mutate } = require('../scripts/lifecycle.cjs');
 const app = (name, status = 'online', script = '/srv/app.cjs') => ({ name, pm2_env: { name, namespace: 'default', pm_exec_path: script, status } });
 function temporary(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pm2-lifecycle-')));
@@ -129,7 +129,7 @@ test('failed sudo authentication leaves service and applications untouched', { s
   fs.writeFileSync(path.join(bin, 'sudo'), '#!/bin/sh\nexit 77\n', { mode: 0o755 });
   fs.mkdirSync(path.join(root, 'node_modules/pm2/bin'), { recursive: true });
   fs.writeFileSync(path.join(root, 'node_modules/pm2/bin/pm2'), 'throw Error("must not execute");');
-  for (const file of ['startup.cjs', 'lifecycle.cjs']) fs.copyFileSync(path.resolve(__dirname, '..', file), path.join(root, file));
+  for (const file of ['startup.cjs', 'lifecycle.cjs']) fs.copyFileSync(path.resolve(__dirname, '../scripts', file), path.join(root, file));
   const state = path.join(root, 'state');
   const result = spawnSync(process.execPath, [path.join(root, 'startup.cjs'), 'startup', '--yes', '--service-name', `pm2-auth-test-${process.pid}`], {
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PM2_HOME: state }, encoding: 'utf8', timeout: 15000,

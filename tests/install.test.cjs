@@ -5,8 +5,8 @@ const { tmpdir } = require('node:os');
 const { resolve, join, dirname } = require('node:path');
 const { test } = require('node:test');
 
-const installer = resolve(__dirname, '../install.sh');
-const uninstaller = resolve(__dirname, '../uninstall.sh');
+const installer = resolve(__dirname, '../scripts/install.sh');
+const uninstaller = resolve(__dirname, '../scripts/uninstall.sh');
 
 function fixture(t, existing = true, options = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'pm2-wrapper-test-')));

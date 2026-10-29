@@ -30,12 +30,12 @@ install:
 	if [ -n "$(NODE_VERSION)" ]; then set -- "$$@" --node-version "$(NODE_VERSION)"; fi; \
 	if [ -n "$(PM2_VERSION)" ]; then set -- "$$@" --pm2-version "$(PM2_VERSION)"; fi; \
 	if [ -n "$(NVM_DIR)" ]; then set -- "$$@" --nvm-dir "$(NVM_DIR)"; fi; \
-	exec ./install.sh "$$@"
+	exec ./scripts/install.sh "$$@"
 
 # Generate ./pm2 for inspection. This does not install PM2 or modify .nvmrc.
 preview:
-	@PM2_WRAPPER_NODE_VERSION="$(NODE_VERSION)" NVM_DIR="$(NVM_DIR)" ./install.sh --preview
+	@PM2_WRAPPER_NODE_VERSION="$(NODE_VERSION)" NVM_DIR="$(NVM_DIR)" ./scripts/install.sh --preview
 
 # Remove the runtime and its PATH configuration, preserving PM2 state.
 uninstall:
-	@./uninstall.sh --dir "$(INSTALL_DIR)"
+	@./scripts/uninstall.sh --dir "$(INSTALL_DIR)"

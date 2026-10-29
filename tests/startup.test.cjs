@@ -3,7 +3,7 @@ const { test } = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { words, resolveNode, macStatus, linuxConfig, linuxNode, show } = require('../startup.cjs');
+const { words, resolveNode, macStatus, linuxConfig, linuxNode, show } = require('../scripts/startup.cjs');
 
 function fixture(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pm2-startup-test-')));
@@ -198,7 +198,7 @@ for (const scenario of [
     Object.assign(env, scenario.environment);
     const source = `
       const assert = require('node:assert/strict');
-      const { show } = require(${JSON.stringify(path.resolve(__dirname, '../startup.cjs'))});
+      const { show } = require(${JSON.stringify(path.resolve(__dirname, '../scripts/startup.cjs'))});
       Object.defineProperty(process.stdout, 'isTTY', { value: ${scenario.tty} });
       const serviceQuery = ${serviceQuery.toString()};
       process.exitCode = show([], {}, { platform: 'linux', query: serviceQuery() });

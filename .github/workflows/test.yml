@@ -17,8 +17,8 @@ jobs:
         with:
           node-version: 22
       - run: npm test
-      - run: sh -n install.sh
+      - run: sh -n scripts/install.sh
       - run: make -n nvmrc
       - run: make -n preview NODE_VERSION=22.21.1
       - run: make -n install NODE_VERSION=22.21.1
-      - run: ./install.sh --help
+      - run: ./scripts/install.sh --help

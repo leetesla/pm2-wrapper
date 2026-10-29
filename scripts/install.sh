@@ -34,8 +34,8 @@ outro() {
 usage() {
   cat <<'USAGE'
 Usage:
-  ./install.sh --dir DIR [--node-version VERSION] [--pm2-version VERSION] [--nvm-dir DIR]
-  ./install.sh --preview [--node-version VERSION] [--nvm-dir DIR]
+  ./scripts/install.sh --dir DIR [--node-version VERSION] [--pm2-version VERSION] [--nvm-dir DIR]
+  ./scripts/install.sh --preview [--node-version VERSION] [--nvm-dir DIR]
 
 Options:
   --dir DIR             Installation directory (required unless --preview)
@@ -268,7 +268,7 @@ PM2_CLI="$ROOT/node_modules/pm2/bin/pm2"
 
 if [ ! -x "$NODE" ]; then
   printf 'pm2-wrapper: configured Node executable is missing: %s\n' "$NODE" >&2
-  printf 'Re-run install.sh after installing the desired Node version.\n' >&2
+  printf 'Re-run scripts/install.sh after installing the desired Node version.\n' >&2
   exit 1
 fi
 
@@ -283,7 +283,7 @@ esac
 
 if [ ! -f "$PM2_CLI" ]; then
   printf 'pm2-wrapper: PM2 CLI not found: %s\n' "$PM2_CLI" >&2
-  printf 'Re-run install.sh to repair the installation.\n' >&2
+  printf 'Re-run scripts/install.sh to repair the installation.\n' >&2
   exit 1
 fi
 

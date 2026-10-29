@@ -12,7 +12,7 @@ for (let i = 2; i < process.argv.length; i += 2) options[process.argv[i]] = proc
 if (!options['--runtime']) throw new Error('Usage: node scripts/test-startup.cjs --runtime DIR [--user USER]');
 if (process.platform === 'linux' && process.getuid() !== 0) throw new Error('Linux integration requires root; --user selects the PM2 user');
 if (process.platform === 'darwin' && process.getuid() === 0) throw new Error('Run macOS integration in the logged-in user session');
-const source = path.resolve(__dirname, '..');
+const source = __dirname;
 const root = fs.realpathSync(fs.mkdtempSync('/tmp/pm2-startup-test-'));
 const runtime = path.join(root, 'runtime');
 const state = path.join(root, 'state');
@@ -35,7 +35,7 @@ const helper = path.join(runtime, 'startup.cjs');
 const env = { HOME: account.home, PM2_HOME: state, USER: user, LOGNAME: user, LANG: 'C.UTF-8', TERM: 'xterm-256color',
   PATH: `${path.dirname(process.execPath)}:${process.env.PATH}`, NO_COLOR: '1', PM2_DISCRETE_MODE: 'true' };
 const serviceFile = linux ? `/etc/systemd/system/${service}.service` : path.join(account.home, 'Library/LaunchAgents', `${service}.plist`);
-const { context, readState, verifyApps } = require('../lifecycle.cjs');
+const { context, readState, verifyApps } = require('./lifecycle.cjs');
 function invoke(file, args, expected = 0, extra = {}) {
   const result = spawnSync(file, args, { env, cwd: account.home, encoding: 'utf8', timeout: 90000, maxBuffer: 8 * 1024 * 1024, ...extra });
   fs.appendFileSync(log, `\n$ ${file} ${args.join(' ')}\n${result.stdout || ''}${result.stderr || ''}\nexit=${result.status}\n`);

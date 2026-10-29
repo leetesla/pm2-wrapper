@@ -58,7 +58,7 @@ make preview
 make preview NODE_VERSION=22.21.1
 ```
 
-预览模式会解析 Node 可执行文件并写入包装脚本；在仓库外生成预览时，还会将 `startup.cjs` 和 `lifecycle.cjs` 复制到脚本所在目录。它不会安装 PM2，也不会修改 `.nvmrc`、`startup.json` 或 npm 包配置文件。仓库根目录中生成的 `pm2` 文件也已被 Git 忽略。普通 PM2 命令需要该目录的 `node_modules` 中已安装 PM2；`show startup` 无需安装 PM2 即可运行。
+预览模式会解析 Node 可执行文件并写入包装脚本；同时将 `scripts/startup.cjs` 和 `scripts/lifecycle.cjs` 复制到生成的包装脚本所在目录。它不会安装 PM2，也不会修改 `.nvmrc`、`startup.json` 或 npm 包配置文件。仓库根目录中生成的 `pm2`、`startup.cjs` 和 `lifecycle.cjs` 文件均已被 Git 忽略。普通 PM2 命令需要该目录的 `node_modules` 中已安装 PM2；`show startup` 无需安装 PM2 即可运行。
 
 预览会检查 `PATH` 中是否已有 `pm2` 命令，找到时显示其路径，不要求确认。预览和安装会在终端中显示各步骤标题，并高亮状态信息。输出被重定向、`TERM=dumb` 或设置了 `NO_COLOR` 时，不使用颜色。
 
@@ -98,7 +98,7 @@ make install NODE_VERSION=22.21.1 NVM_DIR="$HOME/.nvm"
 也可以直接调用安装脚本：
 
 ```sh
-./install.sh --dir "$HOME/.local/share/pm2-wrapper" --node-version 22.21.1
+./scripts/install.sh --dir "$HOME/.local/share/pm2-wrapper" --node-version 22.21.1
 ```
 
 如果目标目录中已安装 PM2，且本次未指定 PM2 版本，安装器会保留现有版本。首次安装且未指定版本时，会安装当前发布的 PM2 版本。
@@ -153,7 +153,7 @@ export PATH="$HOME/.local/share/pm2-wrapper:$PATH"
 如果希望自行管理 PATH，可以跳过自动配置：
 
 ```sh
-./install.sh --dir "$HOME/.local/share/pm2-wrapper" --node-version 22.21.1 --no-modify-path
+./scripts/install.sh --dir "$HOME/.local/share/pm2-wrapper" --node-version 22.21.1 --no-modify-path
 ```
 
 对于其他 shell，安装器只提供手动配置 PATH 的说明，不修改其启动配置文件。
@@ -228,7 +228,7 @@ make uninstall
 make uninstall INSTALL_DIR="$HOME/services/pm2-runtime"
 ```
 
-也可以直接执行 `./uninstall.sh --dir DIR`。卸载时要求 PATH 中有可用的 Node.js，不会加载 nvm。
+也可以直接执行 `./scripts/uninstall.sh --dir DIR`。卸载时要求 PATH 中有可用的 Node.js，不会加载 nvm。
 
 卸载会移除本工具管理的运行时文件（包括 `startup.cjs`、`lifecycle.cjs` 和 `startup.json`），并从 bash、zsh 启动配置文件中移除与该安装目录匹配的 `pm2-wrapper` PATH 配置块。如果设置了 `ZDOTDIR`，也会检查该目录下的配置文件。
 
@@ -250,8 +250,8 @@ make install
 ## 测试
 
 ```sh
-sh -n install.sh
-./install.sh --help
+sh -n scripts/install.sh
+./scripts/install.sh --help
 make -n nvmrc
 make -n preview
 make -n install
