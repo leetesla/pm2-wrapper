@@ -1,0 +1,13 @@
+{
+  "name": "pm2-wrapper",
+  "version": "0.1.0",
+  "description": "A lightweight wrapper for PM2 with a dedicated Node.js runtime and per-project Node.js selection.",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
