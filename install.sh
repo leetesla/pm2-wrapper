@@ -84,18 +84,22 @@ export NVM_DIR
 
 [ -s "$NVM_DIR/nvm.sh" ] || fail "nvm.sh not found at $NVM_DIR/nvm.sh (use --nvm-dir to set the nvm directory)"
 
-if [ -n "$NODE_VERSION" ]; then
-  printf '%s\n' "$NODE_VERSION" > "$PREFIX/.nvmrc"
-elif [ ! -s "$PREFIX/.nvmrc" ]; then
+if [ -z "$NODE_VERSION" ] && [ ! -s "$PREFIX/.nvmrc" ]; then
   fail "no $PREFIX/.nvmrc found; provide --node-version VERSION"
 fi
 
-# Resolve this installation's runtime before installing PM2.
+# Resolve the target runtime without changing files in the target directory yet.
 # shellcheck disable=SC1090
 . "$NVM_DIR/nvm.sh"
 cd "$PREFIX"
-if ! nvm use --silent >/dev/null; then
-  fail "Node version in $PREFIX/.nvmrc is not available; install it first with: nvm install"
+if [ -n "$NODE_VERSION" ]; then
+  if ! nvm use "$NODE_VERSION" --silent >/dev/null; then
+    fail "Node version $NODE_VERSION is not available; install it first with: nvm install $NODE_VERSION"
+  fi
+else
+  if ! nvm use --silent >/dev/null; then
+    fail "Node version in $PREFIX/.nvmrc is not available; install it first with: nvm install"
+  fi
 fi
 NODE=$(nvm which)
 [ -x "$NODE" ] || fail "nvm returned a non-executable Node path: $NODE"
@@ -112,6 +116,11 @@ else
   "description": "Private runtime directory managed by pm2-wrapper"
 }
 PACKAGE
+fi
+
+# Only write .nvmrc after confirming the target is owned by this tool.
+if [ -n "$NODE_VERSION" ]; then
+  printf '%s\n' "$NODE_VERSION" > "$PREFIX/.nvmrc"
 fi
 
 if [ -z "$PM2_VERSION" ] && [ -f "$PREFIX/node_modules/pm2/package.json" ]; then
