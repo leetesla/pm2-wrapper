@@ -167,7 +167,7 @@ pm2 show startup
 pm2 show startup --service my-pm2
 ```
 
-`startup` 和 `unstartup` 会先只读检查服务、daemon、Node 和应用状态，展示执行计划及停机影响，并询问 `是否继续执行以上操作？[y/N]`。拒绝、直接回车或输入结束都会取消，不修改服务和应用。非交互环境只展示计划；自动化执行需显式传入 `--yes`：
+`startup` 和 `unstartup` 会先只读检查服务、daemon、Node 和应用状态，展示执行计划及停机影响，并询问 `是否继续执行以上操作？[Y/n]`。直接回车默认继续，也接受 `y` 或 `yes`（不区分大小写）；拒绝、无效输入或输入结束都会取消，不修改服务和应用。非交互环境只展示计划；自动化执行需显式传入 `--yes`：
 
 ```sh
 pm2 startup --yes

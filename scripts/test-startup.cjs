@@ -62,7 +62,7 @@ function apps() {
 }
 function interactive(action, answer, expected) {
   const argv = [process.execPath, helper, action, '--service-name', service, ...(linux ? ['-u', user] : [])];
-  const python = `import os,pty,select,sys,time,json\npid,fd=pty.fork()\nif pid==0: os.execvpe(sys.argv[1],json.loads(sys.argv[2]),os.environ)\ndeadline=time.monotonic()+75;sent=False\nwhile time.monotonic()<deadline:\n ready,_,_=select.select([fd],[],[],0.2)\n if ready:\n  try: data=os.read(fd,65536)\n  except OSError: break\n  if not data: break\n  os.write(1,data)\n  if b'[y/N]' in data and not sent: os.write(fd,sys.argv[3].encode());sent=True\n done,status=os.waitpid(pid,os.WNOHANG)\n if done: sys.exit(os.waitstatus_to_exitcode(status))\nelse:\n os.kill(pid,15);sys.exit(124)\n_,status=os.waitpid(pid,0);sys.exit(os.waitstatus_to_exitcode(status))\n`;
+  const python = `import os,pty,select,sys,time,json\npid,fd=pty.fork()\nif pid==0: os.execvpe(sys.argv[1],json.loads(sys.argv[2]),os.environ)\ndeadline=time.monotonic()+75;sent=False\nwhile time.monotonic()<deadline:\n ready,_,_=select.select([fd],[],[],0.2)\n if ready:\n  try: data=os.read(fd,65536)\n  except OSError: break\n  if not data: break\n  os.write(1,data)\n  if b'[Y/n]' in data and not sent: os.write(fd,sys.argv[3].encode());sent=True\n done,status=os.waitpid(pid,os.WNOHANG)\n if done: sys.exit(os.waitstatus_to_exitcode(status))\nelse:\n os.kill(pid,15);sys.exit(124)\n_,status=os.waitpid(pid,0);sys.exit(os.waitstatus_to_exitcode(status))\n`;
   invoke('python3', ['-c', python, process.execPath, JSON.stringify(argv), answer], expected);
 }
 let expectedApps;
@@ -86,7 +86,7 @@ try {
   assert.equal(inspect().daemon, standalone);
   assert.equal(fs.readFileSync(path.join(state, 'dump.pm2'), 'utf8'), oldDump);
   console.log('PASS: interactive refusal leaves daemon, applications and saved list unchanged');
-  interactive('startup', 'y\n', 0);
+  interactive('startup', '\n', 0);
   assert.equal(inspect().healthy, true);
   assert.notEqual(inspect().daemon, standalone);
   verifyApps(expectedApps, apps());
@@ -102,7 +102,7 @@ try {
   console.log('PASS: healthy startup and enable-only startup keep the same daemon PID');
   lifecycle('unstartup', false, 1);
   assert.equal(inspect().daemon, managed);
-  lifecycle('unstartup');
+  interactive('unstartup', '\n', 0);
   assert.equal(inspect().daemon, 0);
   assert.equal(fs.existsSync(serviceFile), false);
   const saved = fs.readFileSync(path.join(state, 'dump.pm2'), 'utf8');

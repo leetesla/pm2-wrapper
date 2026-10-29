@@ -22,7 +22,7 @@ test('startup options normalize names, preserve overrides, and consume wrapper c
 for (const args of [['startup', '--unknown'], ['startup', '--service-name'], ['startup', '--service-name', '-bad'], ['startup', '--service-name', '../other'], ['kill'], ['startup', 'systemv']]) {
   test(`invalid lifecycle options fail before execution: ${JSON.stringify(args)}`, () => assert.throws(() => parse(args)));
 }
-for (const [answer, expected] of [['y\n', true], ['YES\n', true], ['n\n', false], ['\n', false], ['other\n', false]]) {
+for (const [answer, expected] of [['y\n', true], ['YES\n', true], ['n\n', false], ['NO\n', false], ['\n', true], ['  \n', true], ['other\n', false]]) {
   test(`interactive confirmation ${JSON.stringify(answer)}`, async () => {
     const input = new PassThrough(), output = new PassThrough();
     input.isTTY = output.isTTY = true;

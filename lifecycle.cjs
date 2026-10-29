@@ -177,8 +177,11 @@ function verifyApps(expected, actual, { runtime = false } = {}) {
 async function confirm(question, input = process.stdin, output = process.stdout) {
   if (!input.isTTY || !output.isTTY) return false;
   const reader = createInterface({ input, output });
-  const closed = new Promise(resolve => reader.once('close', () => resolve('')));
-  try { return /^y(es)?$/i.test((await Promise.race([reader.question(`${question} [y/N] `), closed])).trim()); }
+  const closed = new Promise(resolve => reader.once('close', () => resolve(null)));
+  try {
+    const answer = await Promise.race([reader.question(`${question} [Y/n] `), closed]);
+    return answer !== null && /^(y(es)?)?$/i.test(answer.trim());
+  }
   catch { return false; }
   finally { reader.close(); }
 }
