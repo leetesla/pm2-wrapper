@@ -31,7 +31,7 @@ Clone this repository, then install into a dedicated directory. The path is conf
     # The selected Node.js version must already be installed.
     ./install.sh --dir "$HOME/.local/share/pm2-wrapper" --node-version 22.21.1
 
-If the target directory already contains a **.nvmrc**, it is used unless **--node-version** is provided. If PM2 is already installed in the target directory and **--pm2-version** is omitted, the installer keeps that PM2 version. On a first install, it uses the current PM2 release.
+If the target directory already contains a **.nvmrc**, it is used unless **--node-version** is provided. The installer resolves the selected version and writes its exact version number back to **.nvmrc**, so aliases such as **22** become a reproducible pin. If PM2 is already installed in the target directory and **--pm2-version** is omitted, the installer keeps that PM2 version. On a first install, it uses the current PM2 release.
 
 Optional custom nvm directory:
 
