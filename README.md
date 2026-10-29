@@ -38,31 +38,41 @@ Preview mode only resolves the Node executable and writes the wrapper script. It
 
 ## Install
 
-Clone the repository, then install into any dedicated directory:
+The `make install` target installs into `$HOME/.local/share/pm2-wrapper` by default:
 
 ```sh
-git clone https://github.com/leetesla/pm2-wrapper.git
-cd pm2-wrapper
-
 nvm install 22.21.1
+make install NODE_VERSION=22.21.1
+```
+
+Choose another destination with `INSTALL_DIR`:
+
+```sh
+make install INSTALL_DIR="$HOME/services/pm2-runtime" NODE_VERSION=22.21.1
+```
+
+If the destination already has a `.nvmrc`, omit `NODE_VERSION` to use that setting:
+
+```sh
+make install INSTALL_DIR="$HOME/services/pm2-runtime"
+```
+
+To choose a PM2 version or a non-default nvm directory:
+
+```sh
+make install NODE_VERSION=22.21.1 PM2_VERSION=6.0.0
+make install NODE_VERSION=22.21.1 NVM_DIR="$HOME/.nvm"
+```
+
+The version above is an example. Use a PM2 version appropriate for your environment. The selected Node version must already be installed with nvm; the installer does not download Node automatically.
+
+You can also invoke the installer directly:
+
+```sh
 ./install.sh --dir "$HOME/.local/share/pm2-wrapper" --node-version 22.21.1
 ```
 
-You can also put a `.nvmrc` in the target directory first and omit `--node-version`:
-
-```sh
-mkdir -p "$HOME/.local/share/pm2-wrapper"
-printf '22.21.1\n' > "$HOME/.local/share/pm2-wrapper/.nvmrc"
-./install.sh --dir "$HOME/.local/share/pm2-wrapper"
-```
-
-If PM2 is already installed in that directory and `--pm2-version` is omitted, the installer preserves the installed PM2 version. On a first install, it installs the current PM2 release. To intentionally change PM2:
-
-```sh
-./install.sh --dir "$HOME/.local/share/pm2-wrapper" --pm2-version 6.0.0
-```
-
-The version above is an example. Use a PM2 version appropriate for your environment.
+If PM2 is already installed in the destination and `PM2_VERSION` / `--pm2-version` is omitted, the installer preserves the installed PM2 version. On a first install, it installs the current PM2 release.
 
 ## Result
 
@@ -106,7 +116,7 @@ The generated wrapper embeds the absolute Node executable path. Editing `.nvmrc`
 
 ```sh
 nvm install 22.22.0
-./install.sh --dir "$HOME/.local/share/pm2-wrapper" --node-version 22.22.0
+make install INSTALL_DIR="$HOME/.local/share/pm2-wrapper" NODE_VERSION=22.22.0
 ```
 
 A running PM2 daemon does not change its runtime merely because the wrapper is regenerated. Plan a controlled daemon restart/migration to make the new runtime active. Check your saved process list and service startup configuration before stopping the existing daemon.
@@ -117,5 +127,6 @@ A running PM2 daemon does not change its runtime merely because the wrapper is r
 sh -n install.sh
 ./install.sh --help
 make -n preview NODE_VERSION=22.21.1
+make -n install NODE_VERSION=22.21.1
 npm test
 ```
