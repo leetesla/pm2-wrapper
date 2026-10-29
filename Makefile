@@ -5,11 +5,22 @@ NVM_DIR ?=
 
 .PHONY: nvmrc install preview uninstall
 
-# Record the Node.js version currently selected in this shell.
+# Treat the optional argument in `make nvmrc 22` as a version, not a target.
+ifeq ($(firstword $(MAKECMDGOALS)),nvmrc)
+ifneq ($(word 3,$(MAKECMDGOALS)),)
+$(error Usage: make nvmrc [VERSION])
+endif
+NVMRC_VERSION := $(word 2,$(MAKECMDGOALS))
+ifneq ($(NVMRC_VERSION),)
+.PHONY: $(NVMRC_VERSION)
+$(NVMRC_VERSION):
+	@:
+endif
+endif
+
+# Record the current Node version, or resolve an explicit version with nvm.
 nvmrc:
-	@node -v > .nvmrc
-	@printf 'Wrote .nvmrc: '
-	@cat .nvmrc
+	@NVM_DIR="$(NVM_DIR)" sh ./scripts/write-nvmrc.sh '$(subst ','"'"',$(NVMRC_VERSION))'
 
 # Install PM2 into a dedicated directory.
 # Defaults to the version recorded by make nvmrc.
