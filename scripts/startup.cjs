@@ -213,7 +213,7 @@ function main(args) {
   const root = __dirname;
   const config = settings(root);
   if (args[0] === 'show' && args[1] === 'startup') return show(args.slice(2), config);
-  if (['startup', 'unstartup'].includes(args[0])) return require('./lifecycle.cjs').lifecycle(args, root, config);
+  if (['startup', 'unstartup', 'update', 'updatePM2'].includes(args[0])) return require('./lifecycle.cjs').lifecycle(args, root, config);
   throw new Error('用法：pm2 startup | pm2 unstartup | pm2 show startup');
 }
 

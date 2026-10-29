@@ -143,6 +143,23 @@ test('show startup works without PM2 installed and rejects invalid arguments', (
   assert.doesNotMatch(result.stderr, /PM2 CLI/);
 });
 
+test('generated wrapper intercepts both update commands only on Linux', t => {
+  const { destination, bin, run } = fixture(t, false);
+  assert.equal(run('').status, 0);
+  writeFileSync(join(destination, 'startup.cjs'), 'console.log(JSON.stringify(["lifecycle",...process.argv.slice(2)]));');
+  writeFileSync(join(destination, 'node_modules/pm2/bin/pm2'), 'console.log(JSON.stringify(["native",...process.argv.slice(2)]));');
+  for (const platform of ['Linux', 'Darwin']) {
+    writeFileSync(join(bin, 'uname'), `#!/bin/sh\nprintf '%s\\n' '${platform}'\n`, { mode: 0o755 });
+    for (const action of ['update', 'updatePM2']) {
+      const result = spawnSync(join(destination, 'pm2'), [action, '--yes'], {
+        env: { ...process.env, PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8',
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), [platform === 'Linux' ? 'lifecycle' : 'native', action, '--yes']);
+    }
+  }
+});
+
 test('existing wrapper symlink does not prompt on reinstall', (t) => {
   const { destination, bin, run } = fixture(t, false);
   assert.equal(run('').status, 0);

@@ -8,6 +8,7 @@
 - 在安装时读取选定的 Node 版本，并解析其可执行文件路径。
 - 生成 `pm2` 命令，使用 Node 的绝对路径调用本地 PM2 CLI。
 - 在自启命令中固定 Node，并通过 `pm2 show startup` 检查现有自启配置。
+- Linux 上通过 systemd 更新受管理的 PM2 daemon，避免原生 `pm2 update` 与服务停止流程竞争。
 - 不改变调用它的 shell 所使用的 Node 版本。
 - 默认使用 PM2 的常规状态目录（`~/.pm2`），除非显式设置了 `PM2_HOME`。
 
@@ -190,7 +191,7 @@ macOS 使用当前用户 GUI 登录会话中的 LaunchAgent，无需 sudo。Laun
 
 启动完成后会核对服务归属、有效 PID、实际 daemon 的 Node 路径，以及应用名称、脚本路径、数量和运行状态。原先停止的应用应保持停止。经过短暂观察，PID 和服务重启次数没有变化，才返回成功。任一步失败都会返回非零退出码并显示失败步骤和诊断信息。正常运行的服务不会因保存列表中有旧应用而额外恢复这些应用。
 
-自启命令固定使用包装脚本的 Node，并保留目标用户的 HOME、PM2_HOME 和其他 PATH 条目。各应用的 `interpreter` 仍由应用配置决定。其他 PM2 命令直接透传给本地 CLI。请将 `startup`、`unstartup` 或 `show startup` 放在选项之前。
+自启命令固定使用包装脚本的 Node，并保留目标用户的 HOME、PM2_HOME 和其他 PATH 条目。各应用的 `interpreter` 仍由应用配置决定。除下述 Linux 更新封装外，其他 PM2 命令直接透传给本地 CLI。请将子命令放在选项之前。
 
 自启设置保存在安装目录中，默认路径为 `~/.local/share/pm2-wrapper/startup.json`：
 
@@ -213,6 +214,23 @@ macOS 检查会处理 PM2 模板中的 `LaunchOnlyOnce=true`：一次性任务�
 检查过程不会运行 PM2 CLI、启动其 daemon、加载服务或写入文件。比较基准是当前包装脚本，不会读取 unode 的安装历史。系统服务注册文件仍位于 `~/Library/LaunchAgents/` 或 systemd 单元目录中，`startup.json` 不会移动这些文件。
 
 `show startup` 会高亮自启与运行状态：正常为绿色、未运行或禁用为黄色、失败为红色。无颜色时仍保留文字；重定向输出、`TERM=dumb` 或设置 `NO_COLOR` 时不使用颜色。`show` 将应用名 `startup` 保留给自启检查；如需查看同名应用，请直接调用本地 PM2 CLI。
+
+## Linux daemon 更新
+
+```sh
+pm2 update
+pm2 update --yes
+pm2 updatePM2 --yes
+pm2 update --service-name my-pm2
+```
+
+Linux 上，`update` 和别名 `updatePM2` 会检查 `startup.json` 或 `--service-name` 指定的 systemd 服务。存在匹配服务时，先展示计划并确认，备份恢复文件、保存当前应用，再由 systemd 重启 daemon。服务已停止、失败或 daemon 独立运行时，会先清理残留 daemon，再由 systemd 启动。原服务配置和开机自启开关保持不变。更新会造成短暂停机，完成后验证服务 PID、cgroup 归属、实际 Node 和应用恢复状态，原先停止的应用保持停止。
+
+确认、sudo 认证、`--yes`、`-u USER`、`--hp HOME`、保存失败保护和空列表保护与自启流程相同。服务启动配置与当前 wrapper 不一致、需要 daemon-reload 或无法验证时，在停止应用前退出，请先运行 `pm2 startup` 检查并修复配置。没有对应服务时透传原生更新，不创建或启用服务。macOS 继续透传原生更新。
+
+此命令更新内存中的 daemon，不安装新的 PM2 软件包。需要升级 PM2 时，先用安装器更新安装目录里的 PM2，再执行 `pm2 update`。
+
+该封装避免原生更新替换 daemon 时触发 `ExecStop=pm2 kill`，误停刚启动的新 daemon。参见上游 [Issue #5000](https://github.com/Unitech/pm2/issues/5000#issuecomment-6354821095)。
 
 ## 卸载
 
@@ -302,6 +320,8 @@ npm run test:interpreter -- \
 
 测试使用独立服务和临时 `PM2_HOME`，覆盖交互拒绝与确认、独立 daemon 接管、运行及停止应用恢复、重复启动、禁用后启用、`unstartup → startup`、空列表保护和真实服务故障恢复；结束后移除测试服务和 daemon。请用包装脚本固定的 Node 执行，并指定已安装运行时目录：
 
+Linux 还覆盖 `update` 取消、连续更新、`updatePM2` 别名、禁用自启后更新、空列表更新、独立 daemon 接管、故障恢复，以及没有服务时的原生更新。
+
 ```sh
 # macOS：当前 GUI 登录用户，无需 sudo。
 /path/to/pinned/node scripts/test-startup.cjs --runtime "$HOME/.local/share/pm2-wrapper"
@@ -309,3 +329,5 @@ npm run test:interpreter -- \
 # Linux：root 执行，--user 指定实际 PM2 用户。
 /path/to/pinned/node scripts/test-startup.cjs --runtime /home/gituser/.local/share/pm2-wrapper --user gituser
 ```
+
+可附加 `--wrapper /path/to/generated/pm2`，同时验证生成的 shell 命令分发；该 wrapper 的固定 Node 应与测试使用的 Node 相同。

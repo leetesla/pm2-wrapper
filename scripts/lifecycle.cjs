@@ -22,7 +22,8 @@ function command(file, args, options = {}) {
 }
 function parse(args, config = {}) {
   const result = { action: args[0], yes: false, service: config.service };
-  if (!['startup', 'unstartup'].includes(result.action)) throw new Error('用法：pm2 startup|unstartup [--yes] [--service-name NAME]');
+  if (result.action === 'updatePM2') result.action = 'update';
+  if (!['startup', 'unstartup', 'update'].includes(result.action)) throw new Error('用法：pm2 startup|unstartup|update [--yes] [--service-name NAME]');
   for (let i = 1; i < args.length; i++) {
     let item = args[i];
     if (item === '--yes') { result.yes = true; continue; }
@@ -47,6 +48,7 @@ function parse(args, config = {}) {
 function context(args, root, config, platform = process.platform) {
   const c = { ...parse(args, config), root, platform, node: process.execPath };
   if (!['linux', 'darwin'].includes(platform)) throw new Error('自启封装支持 macOS launchd 和 Linux systemd');
+  if (c.action === 'update' && platform !== 'linux') throw new Error('update 生命周期封装仅支持 Linux');
   if (c.init && (platform === 'linux' ? ['launchd', 'darwin', 'macos'].includes(c.init) : !['launchd', 'darwin', 'macos'].includes(c.init))) {
     throw new Error('启动平台与当前系统不一致');
   }
@@ -200,6 +202,9 @@ function diagnostics(c, log = console.error) {
 }
 function plan(c, s) {
   if (c.action === 'unstartup') return ['保存并备份应用列表', '停止 daemon（运行中的应用将短暂停机）', '禁用自启并移除服务配置', '验证服务和 daemon 已停止；保留恢复列表'];
+  if (c.action === 'update') return [s.daemon ? '保存并备份应用列表' : '保留已有应用恢复列表',
+    s.healthy ? '通过 systemd 重启 daemon（运行中的应用将短暂停机）' : '停止残留 daemon，再由 systemd 启动（运行中的应用将短暂停机）',
+    '保留现有服务配置和开机自启设置', '检查稳定运行、实际 Node 和应用恢复状态'];
   if (s.healthy) return ['启用开机自启', '验证服务、Node 和应用状态（不重启）'];
   return [s.daemon ? '保存并备份应用列表' : '保留已有应用恢复列表',
     ...(s.daemon ? [`${s.managed ? '停止服务' : 'pm2 kill 停止独立 daemon'}（运行中的应用将短暂停机）`] : []),
@@ -261,14 +266,16 @@ async function stop(c, s) {
 async function mutate(c, initial, expected, live = []) {
   let step = '保存应用列表';
   try {
-    const changesRuntime = c.action === 'unstartup' || !initial.healthy;
+    if (c.action === 'update' && !initial.matches) throw new Error('服务启动配置与当前 wrapper 不一致或无法验证，请先执行 pm2 startup');
+    const restartManaged = c.action === 'update' && initial.healthy;
+    const changesRuntime = c.action === 'update' || c.action === 'unstartup' || !initial.healthy;
     if (changesRuntime) {
       backup(c);
       if (initial.daemon && live.length) {
         console.log(asUser(c, [c.cli, 'save', '--force']));
         verifyApps(live, savedApplications(c));
       }
-      step = '停止现有 daemon'; await stop(c, initial);
+      if (!restartManaged) { step = '停止现有 daemon'; await stop(c, initial); }
     }
     step = '生成或移除服务配置';
     if (c.platform === 'linux') {
@@ -279,6 +286,11 @@ async function mutate(c, initial, expected, live = []) {
         }
         if (fs.existsSync(c.file)) fs.unlinkSync(c.file);
         command('systemctl', ['daemon-reload']);
+      } else if (c.action === 'update') {
+        const p = readState(c).p;
+        if (!initial.healthy || p.ActiveState === 'failed' || p.Result === 'start-limit-hit') command('systemctl', ['reset-failed', c.unit]);
+        step = '更新 daemon';
+        command('systemctl', [restartManaged ? 'restart' : 'start', c.unit], { timeout: 120000 });
       } else {
         if (!initial.healthy) console.log(asRootPM2(c));
         command('systemctl', ['daemon-reload']);
@@ -311,7 +323,7 @@ async function mutate(c, initial, expected, live = []) {
     }
     const verify = () => {
       const state = readState(c);
-      if (!state.healthy || !state.enabled) throw new Error('服务、PID、归属、Node 或自启状态不符合预期');
+      if (!state.healthy || (c.action === 'update' ? state.enabled !== initial.enabled : !state.enabled)) throw new Error('服务、PID、归属、Node 或自启状态不符合预期');
       verifyApps(expected, applications(c), { runtime: true });
       return state;
     };
@@ -346,6 +358,17 @@ function elevation(c, args, token) {
 async function lifecycle(args, root, config) {
   const c = context(args, root, config);
   const state = readState(c);
+  if (c.action === 'update') {
+    if (!state.exists) {
+      // Without a systemd unit there is no service teardown racing the native update.
+      const argv = [c.node, c.cli, 'update'];
+      const result = process.getuid() === 0 && c.uid !== 0 ? spawnSync('runuser', ['-u', c.user, '--', ...argv], { env: c.env, cwd: c.home, stdio: 'inherit' }) :
+        spawnSync(argv[0], argv.slice(1), { env: c.env, cwd: c.home, stdio: 'inherit' });
+      if (result.error) throw result.error;
+      return result.status ?? 2;
+    }
+    if (!state.matches) throw new Error('服务启动配置与当前 wrapper 不一致或无法验证，请先执行 pm2 startup');
+  }
   const live = state.daemon ? applications(c) : [];
   const expected = live.length || (state.healthy && c.action === 'startup') ? live : savedApplications(c);
   const token = approval(state, live, expected);

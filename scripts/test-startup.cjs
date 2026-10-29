@@ -9,7 +9,7 @@ const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const options = {};
 for (let i = 2; i < process.argv.length; i += 2) options[process.argv[i]] = process.argv[i + 1];
-if (!options['--runtime']) throw new Error('Usage: node scripts/test-startup.cjs --runtime DIR [--user USER]');
+if (!options['--runtime']) throw new Error('Usage: node scripts/test-startup.cjs --runtime DIR [--user USER] [--wrapper PATH]');
 if (process.platform === 'linux' && process.getuid() !== 0) throw new Error('Linux integration requires root; --user selects the PM2 user');
 if (process.platform === 'darwin' && process.getuid() === 0) throw new Error('Run macOS integration in the logged-in user session');
 const source = __dirname;
@@ -27,11 +27,16 @@ const account = user === os.userInfo().username ? { uid: process.getuid(), gid: 
 fs.chmodSync(root, 0o755);
 fs.mkdirSync(runtime);
 for (const file of ['startup.cjs', 'lifecycle.cjs']) fs.copyFileSync(path.join(source, file), path.join(runtime, file));
+if (options['--wrapper']) {
+  fs.copyFileSync(path.resolve(options['--wrapper']), path.join(runtime, 'pm2'));
+  fs.chmodSync(path.join(runtime, 'pm2'), 0o755);
+}
 fs.symlinkSync(path.resolve(options['--runtime'], 'node_modules'), path.join(runtime, 'node_modules'));
 fs.mkdirSync(state, { mode: 0o700 });
 if (process.getuid() === 0) fs.chownSync(state, account.uid, account.gid);
 const cli = path.join(runtime, 'node_modules/pm2/bin/pm2');
 const helper = path.join(runtime, 'startup.cjs');
+const entry = options['--wrapper'] ? [path.join(runtime, 'pm2')] : [process.execPath, helper];
 const env = { HOME: account.home, PM2_HOME: state, USER: user, LOGNAME: user, LANG: 'C.UTF-8', TERM: 'xterm-256color',
   PATH: `${path.dirname(process.execPath)}:${process.env.PATH}`, NO_COLOR: '1', PM2_DISCRETE_MODE: 'true' };
 const serviceFile = linux ? `/etc/systemd/system/${service}.service` : path.join(account.home, 'Library/LaunchAgents', `${service}.plist`);
@@ -47,7 +52,7 @@ function pm2(args, expected = 0) {
   return process.getuid() === 0 && account.uid !== 0 ? invoke('runuser', ['-u', user, '--', ...argv], expected) : invoke(argv[0], argv.slice(1), expected);
 }
 function lifecycle(action, yes = true, expected = 0) {
-  return invoke(process.execPath, [helper, action, '--service-name', service, ...(linux ? ['-u', user] : []), ...(yes ? ['--yes'] : [])], expected);
+  return invoke(entry[0], [...entry.slice(1), action, '--service-name', service, ...(linux ? ['-u', user] : []), ...(yes ? ['--yes'] : [])], expected);
 }
 function inspect() {
   const previous = process.env.PM2_HOME;
@@ -61,9 +66,9 @@ function apps() {
   return JSON.parse(result.stdout).filter(a => !a.pm2_env.pmx_module);
 }
 function interactive(action, answer, expected) {
-  const argv = [process.execPath, helper, action, '--service-name', service, ...(linux ? ['-u', user] : [])];
+  const argv = [...entry, action, '--service-name', service, ...(linux ? ['-u', user] : [])];
   const python = `import os,pty,select,sys,time,json\npid,fd=pty.fork()\nif pid==0: os.execvpe(sys.argv[1],json.loads(sys.argv[2]),os.environ)\ndeadline=time.monotonic()+75;sent=False\nwhile time.monotonic()<deadline:\n ready,_,_=select.select([fd],[],[],0.2)\n if ready:\n  try: data=os.read(fd,65536)\n  except OSError: break\n  if not data: break\n  os.write(1,data)\n  if b'[Y/n]' in data and not sent: os.write(fd,sys.argv[3].encode());sent=True\n done,status=os.waitpid(pid,os.WNOHANG)\n if done: sys.exit(os.waitstatus_to_exitcode(status))\nelse:\n os.kill(pid,15);sys.exit(124)\n_,status=os.waitpid(pid,0);sys.exit(os.waitstatus_to_exitcode(status))\n`;
-  invoke('python3', ['-c', python, process.execPath, JSON.stringify(argv), answer], expected);
+  invoke('python3', ['-c', python, entry[0], JSON.stringify(argv), answer], expected);
 }
 let expectedApps;
 try {
@@ -100,8 +105,27 @@ try {
   lifecycle('startup');
   assert.equal(inspect().daemon, managed);
   console.log('PASS: healthy startup and enable-only startup keep the same daemon PID');
+  if (linux) {
+    const beforeCancel = inspect().daemon;
+    lifecycle('update', false, 1);
+    assert.equal(inspect().daemon, beforeCancel);
+    for (const action of ['update', 'updatePM2']) {
+      const previous = inspect().daemon;
+      lifecycle(action);
+      assert.equal(inspect().healthy, true);
+      assert.notEqual(inspect().daemon, previous);
+      verifyApps(expectedApps, apps());
+    }
+    invoke('systemctl', ['disable', `${service}.service`]);
+    lifecycle('update');
+    assert.equal(inspect().healthy, true);
+    assert.equal(inspect().enabled, false);
+    verifyApps(expectedApps, apps());
+    lifecycle('startup');
+    console.log('PASS: update cancellation, repeated update and alias preserve apps, stopped status and disabled boot setting');
+  }
   lifecycle('unstartup', false, 1);
-  assert.equal(inspect().daemon, managed);
+  assert.equal(inspect().healthy, true);
   interactive('unstartup', '\n', 0);
   assert.equal(inspect().daemon, 0);
   assert.equal(fs.existsSync(serviceFile), false);
@@ -113,6 +137,13 @@ try {
   assert.equal(fs.readFileSync(path.join(state, 'dump.pm2'), 'utf8'), saved);
   console.log('PASS: unstartup → empty standalone daemon → startup preserves and restores the nonempty dump');
   if (linux) {
+    invoke('systemctl', ['stop', `${service}.service`]);
+    pm2(['list']);
+    lifecycle('update');
+    assert.equal(inspect().healthy, true);
+    verifyApps(expectedApps, apps());
+    assert.equal(fs.readFileSync(path.join(state, 'dump.pm2'), 'utf8'), saved);
+    console.log('PASS: update hands over an empty standalone daemon without overwriting the nonempty recovery list');
     invoke('systemctl', ['stop', `${service}.service`]);
     pm2(['list']);
     const failed = invoke('systemctl', ['start', `${service}.service`], null);
@@ -127,13 +158,30 @@ try {
     invoke('/bin/launchctl', ['bootstrap', `gui/${account.uid}`, serviceFile]);
     pm2(['list']);
   }
-  lifecycle('startup');
+  lifecycle(linux ? 'update' : 'startup');
   assert.equal(inspect().healthy, true);
   verifyApps(expectedApps, apps());
   console.log(`PASS: recovery from real ${linux ? 'systemd PID/protocol failure' : 'launchd process failure'} with an independent daemon`);
+  if (linux) {
+    pm2(['delete', 'all']);
+    pm2(['save', '--force']);
+    const previous = inspect().daemon;
+    lifecycle('update');
+    assert.equal(inspect().healthy, true);
+    assert.notEqual(inspect().daemon, previous);
+    assert.equal(apps().length, 0);
+    console.log('PASS: empty managed daemon update completes without hanging or leaving systemd');
+  }
   lifecycle('unstartup');
   assert.equal(fs.existsSync(serviceFile), false);
   assert.equal(inspect().daemon, 0);
+  if (linux) {
+    lifecycle('updatePM2');
+    assert.equal(fs.existsSync(serviceFile), false);
+    assert.ok(inspect().daemon);
+    pm2(['kill']);
+    console.log('PASS: update without a systemd unit keeps native behavior and creates no service');
+  }
   console.log(`PASS: ${process.platform} integration complete; test service and daemon removed. Log: ${log}`);
 } catch (error) {
   console.error(error.stack);

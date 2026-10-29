@@ -274,6 +274,11 @@ fi
 
 case "${1-}" in
   startup|unstartup) exec "$NODE" "$ROOT/startup.cjs" "$@" ;;
+  update|updatePM2)
+    if [ "$(uname -s)" = Linux ]; then
+      exec "$NODE" "$ROOT/startup.cjs" "$@"
+    fi
+    ;;
   show)
     if [ "${2-}" = startup ]; then
       exec "$NODE" "$ROOT/startup.cjs" "$@"

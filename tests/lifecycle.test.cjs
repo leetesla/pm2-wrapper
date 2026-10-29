@@ -5,7 +5,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { PassThrough } = require('node:stream');
 const { spawnSync } = require('node:child_process');
-const { parse, confirm, elevation, savedApplications, verifyApps, plan, approval, macPlist, mutate } = require('../scripts/lifecycle.cjs');
+const { parse, context, confirm, elevation, savedApplications, verifyApps, plan, approval, macPlist, mutate } = require('../scripts/lifecycle.cjs');
 const app = (name, status = 'online', script = '/srv/app.cjs') => ({ name, pm2_env: { name, namespace: 'default', pm_exec_path: script, status } });
 function temporary(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pm2-lifecycle-')));
@@ -18,6 +18,12 @@ test('startup options normalize names, preserve overrides, and consume wrapper c
     action: 'startup', yes: true, service: 'custom', user: 'gituser', home: '/srv/user', waitIp: true,
   });
   assert.equal(parse(['unstartup'], { service: 'custom.plist' }).service, 'custom');
+});
+test('update alias shares lifecycle options and is limited to Linux', () => {
+  assert.deepEqual(parse(['updatePM2', '--yes', '--service-name', 'custom.service', '-u', 'gituser']), {
+    action: 'update', yes: true, service: 'custom', user: 'gituser',
+  });
+  assert.throws(() => context(['update'], '/unused', {}, 'darwin'), /仅支持 Linux/);
 });
 for (const args of [['startup', '--unknown'], ['startup', '--service-name'], ['startup', '--service-name', '-bad'], ['startup', '--service-name', '../other'], ['kill'], ['startup', 'systemv']]) {
   test(`invalid lifecycle options fail before execution: ${JSON.stringify(args)}`, () => assert.throws(() => parse(args)));
@@ -93,6 +99,21 @@ test('plans announce downtime for handover and avoid restarting healthy services
   assert.match(plan({ action: 'startup', platform: 'linux' }, { daemon: 123 }).join('\n'), /pm2 kill.*短暂停机/);
   assert.doesNotMatch(plan({ action: 'startup' }, { healthy: true }).join('\n'), /停止|kill/);
   assert.match(plan({ action: 'unstartup' }, {}).join('\n'), /保留恢复列表/);
+  assert.match(plan({ action: 'update' }, { healthy: true, daemon: 123 }).join('\n'), /systemd 重启.*短暂停机/);
+  assert.match(plan({ action: 'update' }, { healthy: false }).join('\n'), /残留 daemon/);
+});
+test('update saves even healthy services, and save failure prevents any restart', async t => {
+  const root = temporary(t), cli = path.join(root, 'cli.cjs');
+  const calls = path.join(root, 'calls');
+  fs.writeFileSync(cli, `require('fs').appendFileSync(${JSON.stringify(calls)},process.argv.slice(2).join(' '));process.exit(9);`);
+  const dump = JSON.stringify([app('online').pm2_env]);
+  fs.writeFileSync(path.join(root, 'dump.pm2'), dump);
+  const c = { action: 'update', platform: 'linux', node: process.execPath, cli, user: os.userInfo().username,
+    uid: process.getuid(), gid: process.getgid(), home: root, pm2Home: root, unit: 'pm2-unused-test.service', env: process.env };
+  assert.equal(await mutate(c, { daemon: 123, healthy: true, matches: true }, [app('online')], [app('online')]), 2);
+  assert.equal(fs.readFileSync(calls, 'utf8'), 'save --force');
+  assert.equal(fs.readFileSync(path.join(root, 'dump.pm2'), 'utf8'), dump);
+  assert.equal(fs.readdirSync(root).filter(name => name.startsWith('startup-backup-')).length, 1);
 });
 test('save failures stop the lifecycle before daemon shutdown and retain backups', async t => {
   const root = temporary(t), cli = path.join(root, 'cli.cjs');
